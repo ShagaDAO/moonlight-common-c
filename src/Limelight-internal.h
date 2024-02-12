@@ -12,6 +12,7 @@
 #include "ByteBuffer.h"
 
 #include <enet/enet.h>
+#include <irohnet.h>
 
 // Common globals
 extern char* RemoteAddrString;
@@ -37,6 +38,7 @@ extern uint16_t RtspPortNumber;
 extern uint16_t ControlPortNumber;
 extern uint16_t AudioPortNumber;
 extern uint16_t VideoPortNumber;
+extern NodeAddr_t IrohServerNodeAddr;
 
 extern SS_PING AudioPingPayload;
 extern SS_PING VideoPingPayload;
@@ -135,7 +137,7 @@ void stopVideoDepacketizer(void);
 void requestDecoderRefresh(void);
 void notifyFrameLost(unsigned int frameNumber, bool speculative);
 
-void initializeVideoStream(void);
+void initializeVideoStream(MagicEndpoint_t*);
 void destroyVideoStream(void);
 void notifyKeyFrameReceived(void);
 int startVideoStream(void* rendererContext, int drFlags);

@@ -46,16 +46,25 @@ target_link_libraries(moonlight-common-c PRIVATE enet)
 
 # Import targets defined in a package or workspace manifest `Cargo.toml` file
 corrosion_import_crate(MANIFEST_PATH iroh-net-ffi/Cargo.toml)
+corrosion_set_features(generate_headers FEATURES headers)
 
-target_link_libraries(moonlight-common-c PUBLIC iroh-net-ffi)
-target_include_directories(moonlight-common-c PUBLIC iroh-net-ffi)
+target_link_libraries(moonlight-common-c PRIVATE iroh-net-ffi)
+target_include_directories(moonlight-common-c PRIVATE iroh-net-ffi)
 
 if(MSVC)
   target_compile_options(moonlight-common-c PRIVATE /W3 /wd4100 /wd4232 /wd5105 /WX)
   target_link_libraries(moonlight-common-c PRIVATE ws2_32.lib winmm.lib)
+  # TODO: iroh
 elseif(MINGW)
-  target_link_libraries(moonlight-common-c PRIVATE -lws2_32 -lwinmm)
+  target_link_libraries(moonlight-common-c PRIVATE -lws2_32 -lwinmm -lm -lkernel32 -ladvapi32 -lbcrypt -lntdll -luserenv -lws2_32 -lmsvcrt)
+elseif(APPLE)
+  target_link_libraries(moonlight-common-c PRIVATE -lSystem -lc -lm "-framework Cocoa" "-framework Security" "-framework SystemConfiguration")
+  target_compile_options(moonlight-common-c PRIVATE -Wall -Wextra -Wno-unused-parameter -Werror)
+  if (CODE_ANALYSIS AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
+    target_compile_options(moonlight-common-c PRIVATE -fanalyzer)
+  endif()
 else()
+  target_link_libraries(moonlight-common-c PRIVATE -lc -lm)
   target_compile_options(moonlight-common-c PRIVATE -Wall -Wextra -Wno-unused-parameter -Werror)
   if (CODE_ANALYSIS AND CMAKE_C_COMPILER_ID STREQUAL "GNU")
     target_compile_options(moonlight-common-c PRIVATE -fanalyzer)

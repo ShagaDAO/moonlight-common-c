@@ -13,3 +13,6 @@ Makefile
 libiroh*
 CMakeCache.txt
 cmake_install.cmake
+generate_headers
+compile_commands.json
+*.dylib

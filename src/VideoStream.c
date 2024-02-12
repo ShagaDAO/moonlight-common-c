@@ -11,7 +11,10 @@ static RTP_VIDEO_QUEUE rtpQueue;
 static SOCKET rtpSocket = INVALID_SOCKET;
 static SOCKET firstFrameSocket = INVALID_SOCKET;
 
-static Connection_t * irohConnection = NULL;
+static MagicEndpoint_t* irohEndpoint = NULL;
+static Connection_t* irohConnection = NULL;
+static RecvStream_t* irohRecvStream = NULL;
+static SendStream_t* irohSendStream = NULL;
 
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 
@@ -38,13 +41,14 @@ static bool receivedFullFrame;
 #define RTP_RECV_PACKETS_BUFFERED 2048
 
 // Initialize the video stream
-void initializeVideoStream(void) {
+void initializeVideoStream(MagicEndpoint_t* ep) {
     initializeVideoDepacketizer(StreamConfig.packetSize);
     RtpvInitializeQueue(&rtpQueue);
     decryptionCtx = PltCreateCryptoContext();
     receivedDataFromPeer = false;
     firstDataTimeMs = 0;
     receivedFullFrame = false;
+    irohEndpoint = ep;
 }
 
 // Clean up the video stream
@@ -52,6 +56,7 @@ void destroyVideoStream(void) {
     PltDestroyCryptoContext(decryptionCtx);
     destroyVideoDepacketizer();
     RtpvCleanupQueue(&rtpQueue);
+    irohEndpoint = NULL;
 }
 
 // UDP Ping proc
@@ -320,6 +325,14 @@ void stopVideoStream(void) {
         closeSocket(rtpSocket);
         rtpSocket = INVALID_SOCKET;
     }
+    if (irohRecvStream != NULL) {
+        recv_stream_free(irohRecvStream);
+        irohRecvStream = NULL;
+    }
+    if (irohSendStream != NULL) {
+        send_stream_free(irohSendStream);
+        irohSendStream = NULL;
+    }
 
     VideoCallbacks.cleanup();
 }
@@ -346,6 +359,21 @@ int startVideoStream(void* rendererContext, int drFlags) {
         VideoCallbacks.cleanup();
         return LastSocketError();
     }
+
+    // Open video connection
+    irohConnection = connection_default();
+    // TODO: improve API
+    char videoAlpn[] = "/moonlight/video/1";
+    slice_ref_uint8_t videoAlpnSlice;
+    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
+    videoAlpnSlice.len = strlen(videoAlpn);
+
+    err = magic_endpoint_connect(&irohEndpoint, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    if (err != 0) {
+        VideoCallbacks.cleanup();
+        return err;
+    }
+    // TODO: send initial message to indicate this is the video stream
 
     VideoCallbacks.start();
 
