@@ -1,4 +1,5 @@
 #include "Limelight-internal.h"
+#include <irohnet.h>
 
 #define FIRST_FRAME_MAX 1500
 #define FIRST_FRAME_TIMEOUT_SEC 10
@@ -9,6 +10,8 @@ static RTP_VIDEO_QUEUE rtpQueue;
 
 static SOCKET rtpSocket = INVALID_SOCKET;
 static SOCKET firstFrameSocket = INVALID_SOCKET;
+
+static Connection_t * irohConnection = NULL;
 
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 
@@ -154,7 +157,7 @@ static void VideoReceiveThreadProc(void* context) {
                     break;
                 }
             }
-            
+
             // Receive timed out; try again
             continue;
         }
@@ -286,7 +289,7 @@ void stopVideoStream(void) {
 
     // Wake up client code that may be waiting on the decode unit queue
     stopVideoDepacketizer();
-    
+
     PltInterruptThread(&udpPingThread);
     PltInterruptThread(&receiveThread);
     if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
@@ -308,7 +311,7 @@ void stopVideoStream(void) {
     if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
         PltCloseThread(&decoderThread);
     }
-    
+
     if (firstFrameSocket != INVALID_SOCKET) {
         closeSocket(firstFrameSocket);
         firstFrameSocket = INVALID_SOCKET;

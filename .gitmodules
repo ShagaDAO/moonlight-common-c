@@ -1,3 +1,6 @@
 [submodule "enet"]
 	path = enet
 	url = https://github.com/cgutman/enet.git
+[submodule "iroh-net-ffi"]
+	path = iroh-net-ffi
+	url = git@github.com:n0-computer/iroh-net-ffi.git

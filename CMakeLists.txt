@@ -1,3 +1,12 @@
+include(FetchContent)
+
+# for rust builds
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG v0.4 # Optionally specify a commit hash, version tag or branch here
+)
+FetchContent_MakeAvailable(Corrosion)
 
 cmake_minimum_required(VERSION 3.1)
 project(moonlight-common-c LANGUAGES C)
@@ -32,6 +41,14 @@ if (BUILD_SHARED_LIBS_OVERRIDE)
 endif()
 
 target_link_libraries(moonlight-common-c PRIVATE enet)
+
+# add irohnet
+
+# Import targets defined in a package or workspace manifest `Cargo.toml` file
+corrosion_import_crate(MANIFEST_PATH iroh-net-ffi/Cargo.toml)
+
+target_link_libraries(moonlight-common-c PUBLIC iroh-net-ffi)
+target_include_directories(moonlight-common-c PUBLIC iroh-net-ffi)
 
 if(MSVC)
   target_compile_options(moonlight-common-c PRIVATE /W3 /wd4100 /wd4232 /wd5105 /WX)

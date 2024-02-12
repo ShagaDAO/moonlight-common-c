@@ -6,3 +6,10 @@ limelight-common/Release/
 *.sdf
 *.suo
 limelight-common/limelight-common.vcxproj.user
+_deps
+CMakeFiles
+corrosion
+Makefile
+libiroh*
+CMakeCache.txt
+cmake_install.cmake
