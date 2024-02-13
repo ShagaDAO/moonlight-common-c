@@ -1,5 +1,6 @@
 #include "Limelight-internal.h"
 #include "Rtsp.h"
+#include <irohnet.h>
 
 #define RTSP_CONNECT_TIMEOUT_SEC 10
 #define RTSP_RECEIVE_TIMEOUT_SEC 15
@@ -20,6 +21,7 @@ static PPLT_CRYPTO_CONTEXT decryptionCtx;
 static uint32_t encryptionSequenceNumber;
 
 static SOCKET sock = INVALID_SOCKET;
+
 static ENetHost* client;
 static ENetPeer* peer;
 
@@ -267,19 +269,19 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
     payloadLength = request->payloadLength;
     request->payload = NULL;
     request->payloadLength = 0;
-    
+
     // Serialize the RTSP message into a message buffer
     serializedMessage = serializeRtspMessage(request, &messageLen);
     if (serializedMessage == NULL) {
         goto Exit;
     }
-    
+
     // Create the reliable packet that describes our outgoing message
     packet = enet_packet_create(serializedMessage, messageLen, ENET_PACKET_FLAG_RELIABLE);
     if (packet == NULL) {
         goto Exit;
     }
-    
+
     // Send the message
     if (enet_peer_send(peer, 0, packet) < 0) {
         enet_packet_destroy(packet);
@@ -299,10 +301,10 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
             enet_packet_destroy(packet);
             goto Exit;
         }
-        
+
         enet_host_flush(client);
     }
-    
+
     // Wait for a reply
     if (serviceEnetHost(client, &event, RTSP_RECEIVE_TIMEOUT_SEC * 1000) <= 0 ||
         event.type != ENET_EVENT_TYPE_RECEIVE) {
@@ -343,7 +345,7 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
         offset += (int) event.packet->dataLength;
         enet_packet_destroy(event.packet);
     }
-        
+
     if (parseRtspMessage(response, responseBuffer, offset) == RTSP_ERROR_SUCCESS) {
         // Successfully parsed response
         ret = true;
@@ -583,7 +585,7 @@ static bool setupStream(PRTSP_MESSAGE response, char* target, int* error) {
         else {
             transportValue = " ";
         }
-        
+
         if (addOption(&request, "Transport", transportValue) &&
             addOption(&request, "If-Modified-Since",
                 "Thu, 01 Jan 1970 00:00:00 GMT")) {
@@ -920,7 +922,11 @@ bool parseSdpAttributeToInt(const char* payload, const char* name, int* val) {
 }
 
 // Perform RTSP Handshake with the streaming server machine as part of the connection process
-int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
+int performRtspHandshake
+(
+ PSERVER_INFORMATION serverInfo,
+ SendStream_t* sendControlStream,
+ RecvStream_t* recvControlStream) {
     int ret;
 
     LC_ASSERT(RtspPortNumber != 0);
@@ -985,21 +991,21 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             rtspClientVersion = 14;
             break;
     }
-    
+
     // Setup ENet if required by this GFE version
     if (useEnet) {
         ENetAddress address;
         ENetEvent event;
-        
+
         enet_address_set_address(&address, (struct sockaddr *)&RemoteAddr, AddrLen);
         enet_address_set_port(&address, RtspPortNumber);
-        
+
         // Create a client that can use 1 outgoing connection and 1 channel
         client = enet_host_create(RemoteAddr.ss_family, NULL, 1, 1, 0, 0);
         if (client == NULL) {
             return -1;
         }
-    
+
         // Connect to the host
         peer = enet_host_connect(client, &address, 1, 0);
         if (peer == NULL) {
@@ -1007,7 +1013,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             client = NULL;
             return -1;
         }
-    
+
         // Wait for the connect to complete
         if (serviceEnetHost(client, &event, RTSP_CONNECT_TIMEOUT_SEC * 1000) <= 0 ||
             event.type != ENET_EVENT_TYPE_CONNECT) {
@@ -1059,7 +1065,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             ret = response.message.response.statusCode;
             goto Exit;
         }
-        
+
         if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_AV1) && strstr(response.payload, "AV1/90000")) {
             if ((serverInfo->serverCodecModeSupport & SCM_AV1_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_MAIN10)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_MAIN10;
@@ -1175,10 +1181,10 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         // Given there is a non-null session id, get the
-        // first token of the session until ";", which 
+        // first token of the session until ";", which
         // resolves any 454 session not found errors on
         // standard RTSP server implementations.
-        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90") 
+        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90")
         sessionIdString = strdup(strtok_r(sessionId, ";", &strtokCtx));
         if (sessionIdString == NULL) {
             Limelog("Failed to duplicate session ID string\n");
@@ -1232,7 +1238,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
 
         freeMessage(&response);
     }
-    
+
     if (AppVersionQuad[0] >= 5) {
         RTSP_MESSAGE response;
         int error = -1;
@@ -1359,9 +1365,9 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
     }
 
-    
+
     ret = 0;
-    
+
 Exit:
     // Cleanup the ENet stuff
     if (useEnet) {
@@ -1369,7 +1375,7 @@ Exit:
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
         }
-        
+
         if (client != NULL) {
             enet_host_destroy(client);
             client = NULL;

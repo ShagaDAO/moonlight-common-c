@@ -128,7 +128,7 @@ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t chan
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
 
-int performRtspHandshake(PSERVER_INFORMATION serverInfo);
+int performRtspHandshake(PSERVER_INFORMATION serverInfo, SendStream_t* sendControlStream, RecvStream_t* recvControlStream);
 
 void initializeVideoDepacketizer(int pktSize);
 void destroyVideoDepacketizer(void);
