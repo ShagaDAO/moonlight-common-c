@@ -13,8 +13,6 @@ static SOCKET firstFrameSocket = INVALID_SOCKET;
 
 static MagicEndpoint_t* irohEndpoint = NULL;
 static Connection_t* irohConnection = NULL;
-static RecvStream_t* irohRecvStream = NULL;
-static SendStream_t* irohSendStream = NULL;
 
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 
@@ -382,14 +380,6 @@ void stopVideoStream(void) {
         closeSocket(rtpSocket);
         rtpSocket = INVALID_SOCKET;
     }*/
-    if (irohRecvStream != NULL) {
-        recv_stream_free(irohRecvStream);
-        irohRecvStream = NULL;
-    }
-    if (irohSendStream != NULL) {
-        send_stream_free(irohSendStream);
-        irohSendStream = NULL;
-    }
     if (irohConnection != NULL) {
         connection_free(irohConnection);
         irohConnection = NULL;
