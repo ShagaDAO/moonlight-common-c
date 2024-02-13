@@ -8,7 +8,7 @@
 
 static RTP_VIDEO_QUEUE rtpQueue;
 
-static SOCKET rtpSocket = INVALID_SOCKET;
+// static SOCKET rtpSocket = INVALID_SOCKET;
 static SOCKET firstFrameSocket = INVALID_SOCKET;
 
 static MagicEndpoint_t* irohEndpoint = NULL;
@@ -74,15 +74,34 @@ static void VideoPingThreadProc(void* context) {
     // issues related to receiving ICMP port unreachable messages due
     // to sending a packet prior to the host PC binding to that port.
     int pingCount = 0;
+
+    // buffer for iroh sends
+    slice_ref_uint8_t buffer;
+    size_t maxSize = magic_endpoint_connection_max_datagram_size(&irohConnection);
+    if (maxSize < sizeof(VideoPingPayload)) {
+        Limelog("Cannot send video pings, max datagram size too small");
+        return;
+    }
+
     while (!PltIsThreadInterrupted(&udpPingThread)) {
         if (VideoPingPayload.payload[0] != 0) {
             pingCount++;
             VideoPingPayload.sequenceNumber = BE32(pingCount);
 
-            sendto(rtpSocket, (char*)&VideoPingPayload, sizeof(VideoPingPayload), 0, (struct sockaddr*)&saddr, AddrLen);
+            // sendto(rtpSocket, (char*)&VideoPingPayload, sizeof(VideoPingPayload), 0, (struct sockaddr*)&saddr, AddrLen);
+
+            // send via iroh
+            buffer.ptr = (uint8_t*) &VideoPingPayload;
+            buffer.len = sizeof(VideoPingPayload);
+            connection_write_datagram(&irohConnection, buffer);
         }
         else {
-            sendto(rtpSocket, legacyPingData, sizeof(legacyPingData), 0, (struct sockaddr*)&saddr, AddrLen);
+            // sendto(rtpSocket, legacyPingData, sizeof(legacyPingData), 0, (struct sockaddr*)&saddr, AddrLen);
+
+            // send via iroh
+            buffer.ptr = (uint8_t*) &legacyPingData;
+            buffer.len = sizeof(legacyPingData);
+            connection_write_datagram(&irohConnection, buffer);
         }
 
         PltSleepMsInterruptible(&udpPingThread, 500);
@@ -96,7 +115,7 @@ static void VideoReceiveThreadProc(void* context) {
     char* buffer;
     char* encryptedBuffer;
     int queueStatus;
-    bool useSelect;
+    // bool useSelect;
     int waitingForVideoMs;
     bool encrypted;
 
@@ -107,14 +126,14 @@ static void VideoReceiveThreadProc(void* context) {
     bufferSize = decryptedSize + sizeof(RTPV_QUEUE_ENTRY);
     buffer = NULL;
 
-    if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
+    /*if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
         // SO_RCVTIMEO failed, so use select() to wait
         useSelect = true;
     }
     else {
         // SO_RCVTIMEO timeout set for recv()
         useSelect = false;
-    }
+        }*/
 
     // Allocate a staging buffer to use for each received packet
     if (encrypted) {
@@ -130,6 +149,16 @@ static void VideoReceiveThreadProc(void* context) {
     }
 
     waitingForVideoMs = 0;
+
+    // buffer for reading datagrams from iroh
+    Vec_uint8_t recvBuffer = rust_buffer_alloc(encrypted ? receiveSize : bufferSize);
+    int maxSize = magic_endpoint_connection_max_datagram_size(&irohConnection);
+    if (maxSize < encrypted ? receiveSize : bufferSize) {
+      Limelog("Video Receive: maxDatagramSize too small %d\n", maxSize);
+      ListenerCallbacks.connectionTerminated(-1);
+      return;
+    }
+
     while (!PltIsThreadInterrupted(&receiveThread)) {
         PRTP_PACKET packet;
 
@@ -142,16 +171,19 @@ static void VideoReceiveThreadProc(void* context) {
             }
         }
 
-        err = recvUdpSocket(rtpSocket,
+        /* err = recvUdpSocket(rtpSocket,
                             encrypted ? encryptedBuffer : buffer,
                             receiveSize,
-                            useSelect);
+                            useSelect);*/
+        // TODO: read with timeout
+        err = connection_read_datagram(&irohConnection, &recvBuffer);
+
         if (err < 0) {
-            Limelog("Video Receive: recvUdpSocket() failed: %d\n", (int)LastSocketError());
+            Limelog("Video Receive: read_datagram() failed\n");
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             break;
         }
-        else if  (err == 0) {
+        else if (rust_buffer_len(&recvBuffer) == 0) {
             if (!receivedDataFromPeer) {
                 // If we wait many seconds without ever receiving a video packet,
                 // assume something is broken and terminate the connection.
@@ -165,6 +197,29 @@ static void VideoReceiveThreadProc(void* context) {
 
             // Receive timed out; try again
             continue;
+        } else {
+            // TODO: avoid copy
+            if (encrypted) {
+              if ((int)rust_buffer_len(&recvBuffer) < receiveSize) {
+                  // read too little, ignore
+                  Limelog(
+                          "Received video packets of %d bytes, expected %d bytes, ignoring\n",
+                          rust_buffer_len(&recvBuffer),
+                          receiveSize);
+              } else {
+                  memcpy(encryptedBuffer, recvBuffer.ptr, receiveSize);
+              }
+            } else {
+              if ((int)rust_buffer_len(&recvBuffer) < bufferSize) {
+                  // read too little, ignore
+                  Limelog(
+                          "Received video packets of %d bytes, expected %d bytes, ignoring\n",
+                          rust_buffer_len(&recvBuffer),
+                          bufferSize);
+              } else {
+                  memcpy(buffer, recvBuffer.ptr, receiveSize);
+              }
+            }
         }
 
         if (!receivedDataFromPeer) {
@@ -252,6 +307,8 @@ static void VideoReceiveThreadProc(void* context) {
     if (encryptedBuffer != NULL) {
         free(encryptedBuffer);
     }
+
+    rust_buffer_free(recvBuffer);
 }
 
 void notifyKeyFrameReceived(void) {
@@ -321,10 +378,10 @@ void stopVideoStream(void) {
         closeSocket(firstFrameSocket);
         firstFrameSocket = INVALID_SOCKET;
     }
-    if (rtpSocket != INVALID_SOCKET) {
+    /*if (rtpSocket != INVALID_SOCKET) {
         closeSocket(rtpSocket);
         rtpSocket = INVALID_SOCKET;
-    }
+    }*/
     if (irohRecvStream != NULL) {
         recv_stream_free(irohRecvStream);
         irohRecvStream = NULL;
@@ -333,6 +390,11 @@ void stopVideoStream(void) {
         send_stream_free(irohSendStream);
         irohSendStream = NULL;
     }
+    if (irohConnection != NULL) {
+        connection_free(irohConnection);
+        irohConnection = NULL;
+    }
+
 
     VideoCallbacks.cleanup();
 }
@@ -352,13 +414,13 @@ int startVideoStream(void* rendererContext, int drFlags) {
         return err;
     }
 
-    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen,
+    /*rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen,
                               RTP_RECV_PACKETS_BUFFERED * (StreamConfig.packetSize + MAX_RTP_HEADER_SIZE),
                               SOCK_QOS_TYPE_VIDEO);
     if (rtpSocket == INVALID_SOCKET) {
         VideoCallbacks.cleanup();
         return LastSocketError();
-    }
+    }*/
 
     // Open video connection
     irohConnection = connection_default();
@@ -380,7 +442,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
     err = PltCreateThread("VideoRecv", VideoReceiveThreadProc, NULL, &receiveThread);
     if (err != 0) {
         VideoCallbacks.stop();
-        closeSocket(rtpSocket);
+        // closeSocket(rtpSocket);
         VideoCallbacks.cleanup();
         return err;
     }
@@ -392,7 +454,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
             PltInterruptThread(&receiveThread);
             PltJoinThread(&receiveThread);
             PltCloseThread(&receiveThread);
-            closeSocket(rtpSocket);
+            // closeSocket(rtpSocket);
             VideoCallbacks.cleanup();
             return err;
         }
@@ -417,7 +479,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
             if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
                 PltCloseThread(&decoderThread);
             }
-            closeSocket(rtpSocket);
+            // closeSocket(rtpSocket);
             VideoCallbacks.cleanup();
             return LastSocketError();
         }
@@ -441,7 +503,7 @@ int startVideoStream(void* rendererContext, int drFlags) {
         if ((VideoCallbacks.capabilities & (CAPABILITY_DIRECT_SUBMIT | CAPABILITY_PULL_RENDERER)) == 0) {
             PltCloseThread(&decoderThread);
         }
-        closeSocket(rtpSocket);
+        // closeSocket(rtpSocket);
         if (firstFrameSocket != INVALID_SOCKET) {
             closeSocket(firstFrameSocket);
             firstFrameSocket = INVALID_SOCKET;
