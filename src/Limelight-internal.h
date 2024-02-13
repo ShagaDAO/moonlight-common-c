@@ -116,7 +116,7 @@ void setRecorderCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDER
 
 char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length);
 
-int initializeControlStream(void);
+int initializeControlStream(Connection_t* irohConnection);
 int startControlStream(void);
 int stopControlStream(void);
 void destroyControlStream(void);
@@ -124,7 +124,7 @@ void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame);
 void connectionReceivedCompleteFrame(uint32_t frameIndex);
 void connectionSawFrame(uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
-int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
+int sendInputPacketOnControlStream(unsigned char* data, int length);
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
 

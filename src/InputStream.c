@@ -95,7 +95,7 @@ typedef struct _PACKET_HOLDER {
 // Initializes the input stream
 int initializeInputStream(void) {
     memcpy(currentAesIv, StreamConfig.remoteInputAesIv, sizeof(currentAesIv));
-    
+
     // Set a high maximum queue size limit to ensure input isn't dropped
     // while the input send thread is blocked for short periods.
     LbqInitializeLinkedBlockingQueue(&packetQueue, MAX_QUEUED_INPUT_PACKETS);
@@ -129,7 +129,7 @@ int initializeInputStream(void) {
 // Destroys and cleans up the input stream
 void destroyInputStream(void) {
     PLINKED_BLOCKING_QUEUE_ENTRY entry, nextEntry;
-    
+
     PltDestroyCryptoContext(cryptoContext);
 
     entry = LbqDestroyLinkedBlockingQueue(&packetQueue);
@@ -240,10 +240,7 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
     // the encryption.
     if (encryptedControlStream) {
         err = (SOCK_RET)sendInputPacketOnControlStream((unsigned char*)&holder->packet,
-                                                        PACKET_SIZE(holder),
-                                                        holder->channelId,
-                                                        holder->enetPacketFlags,
-                                                        moreData);
+                                                        PACKET_SIZE(holder));
         if (err < 0) {
             Limelog("Input: sendInputPacketOnControlStream() failed: %d\n", (int) err);
             ListenerCallbacks.connectionTerminated(err);
@@ -291,10 +288,7 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
             }
 
             err = (SOCK_RET)sendInputPacketOnControlStream((unsigned char*) encryptedBuffer,
-                                                            (int)(encryptedSize + sizeof(encryptedLengthPrefix)),
-                                                            holder->channelId,
-                                                            holder->enetPacketFlags,
-                                                            moreData);
+                                                            (int)(encryptedSize + sizeof(encryptedLengthPrefix)));
             if (err < 0) {
                 Limelog("Input: sendInputPacketOnControlStream() failed: %d\n", (int) err);
                 ListenerCallbacks.connectionTerminated(err);
@@ -741,7 +735,7 @@ int stopInputStream(void) {
     if (inputSock != INVALID_SOCKET) {
         shutdownTcpSocket(inputSock);
     }
-    
+
     if (inputSock != INVALID_SOCKET) {
         closeSocket(inputSock);
         inputSock = INVALID_SOCKET;
