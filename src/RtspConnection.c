@@ -20,7 +20,8 @@ static PPLT_CRYPTO_CONTEXT encryptionCtx;
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 static uint32_t encryptionSequenceNumber;
 
-static SOCKET sock = INVALID_SOCKET;
+// static SOCKET sock = INVALID_SOCKET;
+static Connection_t* irohConnection = NULL;
 
 static ENetHost* client;
 static ENetPeer* peer;
@@ -372,136 +373,85 @@ Exit:
     return ret;
 }
 
-// Send RTSP message and get response over TCP
+// Send RTSP message and get response over iroh
 static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response, int* error) {
     SOCK_RET err;
     bool ret;
-    int offset;
     char* serializedMessage = NULL;
     int messageLen;
-    char* responseBuffer;
-    int responseBufferSize;
-    int connectRetries;
+    slice_ref_uint8_t send_buffer;
+    SendStream_t* sendControlStream = NULL;
+    RecvStream_t* recvControlStream = NULL;
 
+    Vec_uint8_t recvBuffer= rust_buffer_alloc(0); // 0 alloc as unused
     *error = -1;
     ret = false;
-    responseBuffer = NULL;
-    connectRetries = 0;
 
-    // Retry up to 10 seconds if we receive ECONNREFUSED errors from the host PC.
-    // This can happen with GFE 3.22 when initially launching a session because it
-    // returns HTTP 200 OK for the /launch request before the RTSP handshake port
-    // is listening.
-    do {
-        sock = connectTcpSocket(&RemoteAddr, AddrLen, RtspPortNumber, RTSP_CONNECT_TIMEOUT_SEC);
-        if (sock == INVALID_SOCKET) {
-            *error = LastSocketError();
-            if (*error == ECONNREFUSED) {
-                // Try again after 500 ms on ECONNREFUSED
-                PltSleepMs(RTSP_RETRY_DELAY_MS);
-            }
-            else {
-                // Fail if we get some other error
-                break;
-            }
+    if (sendControlStream == NULL || recvControlStream == NULL) {
+        sendControlStream = send_stream_default();
+        recvControlStream = recv_stream_default();
+        int err = connection_open_bi(&irohConnection, &sendControlStream, &recvControlStream);
+        if (err != 0) {
+            Limelog("Failed to establish control stream for RTSP: %d\n", err);
+            goto Exit;
         }
-        else {
-            // We successfully connected
-            break;
-        }
-    } while (connectRetries++ < (RTSP_CONNECT_TIMEOUT_SEC * 1000) / RTSP_RETRY_DELAY_MS && !ConnectionInterrupted);
-    if (sock == INVALID_SOCKET) {
-        return ret;
     }
 
     serializedMessage = sealRtspMessage(request, &messageLen);
     if (serializedMessage == NULL) {
-        closeSocket(sock);
-        sock = INVALID_SOCKET;
         return ret;
     }
 
-    // Send our message split into smaller chunks to avoid MTU issues.
-    // enableNoDelay() must have been called for sendMtuSafe() to work.
-    enableNoDelay(sock);
-    err = sendMtuSafe(sock, serializedMessage, messageLen);
-    if (err == SOCKET_ERROR) {
-        *error = LastSocketError();
-        Limelog("Failed to send RTSP message: %d\n", *error);
+    send_buffer.ptr = (uint8_t *) &serializedMessage;
+    send_buffer.len = messageLen;
+    err = send_stream_write(&sendControlStream, send_buffer);
+    if (err != 0) {
+        Limelog("Failed to send RTSP message: %d\n", err);
         goto Exit;
     }
 
-    // Read the response until the server closes the connection
-    offset = 0;
-    responseBufferSize = 0;
-    for (;;) {
-        struct pollfd pfd;
-
-        if (offset >= responseBufferSize) {
-            responseBufferSize = offset + 16384;
-            responseBuffer = extendBuffer(responseBuffer, responseBufferSize);
-            if (responseBuffer == NULL) {
-                Limelog("Failed to allocate RTSP response buffer\n");
-                goto Exit;
-            }
-        }
-
-        pfd.fd = sock;
-        pfd.events = POLLIN;
-        err = pollSockets(&pfd, 1, RTSP_RECEIVE_TIMEOUT_SEC * 1000);
-        if (err == 0) {
-            *error = ETIMEDOUT;
-            Limelog("RTSP request timed out\n");
-            goto Exit;
-        }
-        else if (err < 0) {
-            *error = LastSocketError();
-            Limelog("Failed to wait for RTSP response: %d\n", *error);
-            goto Exit;
-        }
-
-        err = recv(sock, &responseBuffer[offset], responseBufferSize - offset, 0);
-        if (err < 0) {
-            // Error reading
-            *error = LastSocketError();
-            Limelog("Failed to read RTSP response: %d\n", *error);
-            goto Exit;
-        }
-        else if (err == 0) {
-            // Done reading
-            break;
-        }
-        else {
-            offset += err;
-        }
+    // Read the next response.
+    // This is done by reading to end and then closing the recv side.
+    // TODO: what is reasonable here? for now using 1 MiB.
+    int maxSize = 1024 * 1024;
+    err = recv_stream_read_to_end_timeout(
+                                          &recvControlStream,
+                                          &recvBuffer,
+                                          maxSize,
+                                          RTSP_RECEIVE_TIMEOUT_SEC * 1000);
+    if (err == MAGIC_ENDPOINT_RESULT_TIMEOUT) {
+        *error = ETIMEDOUT;
+        Limelog("RTSP request timed out\n");
+        goto Exit;
     }
+    else if (err != 0) {
+      *error = -1;
+      Limelog("Failed to wait for RTSP response: %d\n", err);
+      goto Exit;
+    }
+
 
     // Decrypt (if necessary) and deserialize the RTSP response
-    ret = unsealRtspMessage(responseBuffer, offset, response);
-
-    // Fetch the local address for this socket if it's not populated yet
-    if (LocalAddr.ss_family == 0) {
-        SOCKADDR_LEN addrLen = (SOCKADDR_LEN)sizeof(LocalAddr);
-        if (getsockname(sock, (struct sockaddr*)&LocalAddr, &addrLen) < 0) {
-            Limelog("Failed to get local address: %d\n", LastSocketError());
-            memset(&LocalAddr, 0, sizeof(LocalAddr));
-        }
-        else {
-            LC_ASSERT(addrLen == AddrLen);
-        }
-    }
+    int responseLen = rust_buffer_len(&recvBuffer);
+    ret = unsealRtspMessage((char*)recvBuffer.ptr, responseLen, response);
 
 Exit:
     if (serializedMessage != NULL) {
         free(serializedMessage);
     }
 
-    if (responseBuffer != NULL) {
-        free(responseBuffer);
+    rust_buffer_free(recvBuffer);
+
+    // We are done sending, so close the stream.
+    if (sendControlStream != NULL) {
+        send_stream_finish(sendControlStream);
+        sendControlStream = NULL;
+    }
+    if (recvControlStream != NULL) {
+        recv_stream_free(recvControlStream);
+        recvControlStream = NULL;
     }
 
-    closeSocket(sock);
-    sock = INVALID_SOCKET;
     return ret;
 }
 
@@ -923,16 +873,16 @@ bool parseSdpAttributeToInt(const char* payload, const char* name, int* val) {
 
 // Perform RTSP Handshake with the streaming server machine as part of the connection process
 int performRtspHandshake
-(
- PSERVER_INFORMATION serverInfo,
- SendStream_t* sendControlStream,
- RecvStream_t* recvControlStream) {
+(PSERVER_INFORMATION serverInfo, Connection_t* conn) {
     int ret;
 
-    LC_ASSERT(RtspPortNumber != 0);
+    // LC_ASSERT(RtspPortNumber != 0);
+    irohConnection = conn;
 
     // Initialize global state
-    useEnet = (AppVersionQuad[0] >= 5) && (AppVersionQuad[0] <= 7) && (AppVersionQuad[2] < 404);
+    // useEnet = (AppVersionQuad[0] >= 5) && (AppVersionQuad[0] <= 7) && (AppVersionQuad[2] < 404);
+    // TODO: would be cleaner to rip out enet entirely out of this version of the code
+    useEnet = false; // disable Enet usage
     currentSeqNumber = 1;
     hasSessionId = false;
     controlStreamId = APP_VERSION_AT_LEAST(7, 1, 431) ? "streamid=control/13/0" : "streamid=control/1/0";
@@ -963,6 +913,8 @@ int performRtspHandshake
             // NB: If the remote address is not a LAN address, the host will likely not enable high quality
             // audio since it only does that for local streaming normally. We can avoid this limitation,
             // but only if the caller gave us the RTSP session URL that it received from the host during launch.
+
+            // TODO: ensure sunshine sends us high quality data and ignores the rtsp url
             addrToUrlSafeString(&RemoteAddr, urlAddr, sizeof(urlAddr));
             snprintf(rtspTargetUrl, sizeof(rtspTargetUrl), "rtsp%s://%s:%u", useEnet ? "ru" : "", urlAddr, RtspPortNumber);
         }

@@ -43,8 +43,6 @@ NodeAddr_t IrohServerNodeAddr;
 
 MagicEndpoint_t * irohEndpoint;
 Connection_t* irohConnection;
-SendStream_t* sendControlStream;
-RecvStream_t* recvControlStream;
 
 // Connection stages
 static const char* stageNames[STAGE_MAX] = {
@@ -126,8 +124,6 @@ void LiStopConnection(void) {
     }
     if (stage == STAGE_RTSP_HANDSHAKE) {
         Limelog("Cleaning up handshake...");
-        recv_stream_free(recvControlStream);
-        send_stream_finish(sendControlStream);
         connection_free(irohConnection);
         stage--;
         Limelog("done\n");
@@ -475,15 +471,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         Limelog("failed endpoint connect: %d\n", err);
         goto Cleanup;
     }
-    sendControlStream = send_stream_default();
-    recvControlStream = recv_stream_default();
-    err = connection_open_bi(&irohConnection, &sendControlStream, &recvControlStream);
-    if (err != 0) {
-        Limelog("failed stream connection: %d\n", err);
-        goto Cleanup;
-    }
-
-    err = performRtspHandshake(serverInfo, sendControlStream, recvControlStream);
+    err = performRtspHandshake(serverInfo, irohConnection);
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_RTSP_HANDSHAKE, err);
