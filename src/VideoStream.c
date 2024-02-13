@@ -77,7 +77,7 @@ static void VideoPingThreadProc(void* context) {
 
     // buffer for iroh sends
     slice_ref_uint8_t buffer;
-    size_t maxSize = magic_endpoint_connection_max_datagram_size(&irohConnection);
+    size_t maxSize = connection_max_datagram_size(&irohConnection);
     if (maxSize < sizeof(VideoPingPayload)) {
         Limelog("Cannot send video pings, max datagram size too small");
         return;
@@ -152,7 +152,7 @@ static void VideoReceiveThreadProc(void* context) {
 
     // buffer for reading datagrams from iroh
     Vec_uint8_t recvBuffer = rust_buffer_alloc(encrypted ? receiveSize : bufferSize);
-    int maxSize = magic_endpoint_connection_max_datagram_size(&irohConnection);
+    int maxSize = connection_max_datagram_size(&irohConnection);
     if (maxSize < encrypted ? receiveSize : bufferSize) {
       Limelog("Video Receive: maxDatagramSize too small %d\n", maxSize);
       ListenerCallbacks.connectionTerminated(-1);
@@ -176,7 +176,7 @@ static void VideoReceiveThreadProc(void* context) {
                             receiveSize,
                             useSelect);*/
         // TODO: read with timeout
-        err = connection_read_datagram(&irohConnection, &recvBuffer);
+        err = connection_read_datagram_timeout(&irohConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
 
         if (err < 0) {
             Limelog("Video Receive: read_datagram() failed\n");
