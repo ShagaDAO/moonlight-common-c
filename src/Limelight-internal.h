@@ -143,7 +143,7 @@ void notifyKeyFrameReceived(void);
 int startVideoStream(void* rendererContext, int drFlags);
 void stopVideoStream(void);
 
-int initializeAudioStream(void);
+int initializeAudioStream(MagicEndpoint_t*);
 int notifyAudioPortNegotiationComplete(void);
 void destroyAudioStream(void);
 int startAudioStream(void* audioContext, int arFlags);

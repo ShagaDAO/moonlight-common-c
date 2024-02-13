@@ -349,9 +349,37 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.stageComplete(STAGE_PLATFORM_INIT);
     Limelog("done\n");
 
-    Limelog("Resolving host name...");
+    // Limelog("Resolving host name...");
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
-    LC_ASSERT(RtspPortNumber != 0);
+
+    // Initialize iroh endpoint
+    // TODO: move earlier
+    // TODO: actually pass in valid dialing information
+    Limelog("Initializing iroh endpoint...");
+    MagicEndpointConfig_t config = magic_endpoint_config_default();
+
+    // TODO: add other alpns
+    // TODO: improve API
+    char videoAlpn[] = "/moonlight/video/1";
+    slice_ref_uint8_t videoAlpnSlice;
+    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
+    videoAlpnSlice.len = strlen(videoAlpn);
+    magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
+    char audioAlpn[] = "/moonlight/audio/1";
+    slice_ref_uint8_t audioAlpnSlice;
+    audioAlpnSlice.ptr = (uint8_t *) &audioAlpn[0];
+    audioAlpnSlice.len = strlen(audioAlpn);
+    magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
+
+    MagicEndpoint_t * irohEndpoint = magic_endpoint_default();
+    err = magic_endpoint_bind(&config, 0, &irohEndpoint);
+    if (err != 0) {
+        Limelog("failed %d\n", err);
+        goto Cleanup;
+    }
+    Limelog("done\n");
+
+    /*LC_ASSERT(RtspPortNumber != 0);
     if (RtspPortNumber != 48010) {
         // If we have an alternate RTSP port, use that as our test port. The host probably
         // isn't listening on 47989 or 47984 anyway, since they're using alternate ports.
@@ -383,11 +411,11 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
         goto Cleanup;
-    }
+    }*/
     stage++;
     LC_ASSERT(stage == STAGE_NAME_RESOLUTION);
     ListenerCallbacks.stageComplete(STAGE_NAME_RESOLUTION);
-    Limelog("done\n");
+    // Limelog("done\n");
 
     // If STREAM_CFG_AUTO was requested, determine the streamingRemotely value
     // now that we have resolved the target address and impose the video packet
@@ -410,7 +438,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Initializing audio stream...");
     ListenerCallbacks.stageStarting(STAGE_AUDIO_STREAM_INIT);
-    err = initializeAudioStream();
+    err = initializeAudioStream(irohEndpoint);
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_AUDIO_STREAM_INIT, err);
@@ -445,28 +473,6 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     stage++;
     LC_ASSERT(stage == STAGE_CONTROL_STREAM_INIT);
     ListenerCallbacks.stageComplete(STAGE_CONTROL_STREAM_INIT);
-    Limelog("done\n");
-
-    // Initialize iroh endpoint
-    // TODO: move earlier
-    // TODO: actually pass in valid dialing information
-    Limelog("Initializing iroh endpoint...");
-    MagicEndpointConfig_t config = magic_endpoint_config_default();
-
-    // TODO: add other alpns
-    // TODO: improve API
-    char videoAlpn[] = "/moonlight/video/1";
-    slice_ref_uint8_t videoAlpnSlice;
-    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
-    videoAlpnSlice.len = strlen(videoAlpn);
-    magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
-
-    MagicEndpoint_t * irohEndpoint = magic_endpoint_default();
-    err = magic_endpoint_bind(&config, 0, &irohEndpoint);
-    if (err != 0) {
-        Limelog("failed %d\n", err);
-        goto Cleanup;
-    }
     Limelog("done\n");
 
     Limelog("Initializing video stream...");

@@ -425,7 +425,6 @@ int startVideoStream(void* rendererContext, int drFlags) {
         VideoCallbacks.cleanup();
         return err;
     }
-    // TODO: send initial message to indicate this is the video stream
 
     VideoCallbacks.start();
 
