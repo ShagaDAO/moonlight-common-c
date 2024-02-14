@@ -280,7 +280,13 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     AudioPortNumber = 0;
 
     IrohServerNodeAddr = node_addr_default();
-    // TODO: actually supply node addr detail
+    // reuse the address field from the server info
+    err = node_addr_from_string(serverInfo->address, &IrohServerNodeAddr);
+    if (err != 0) {
+        Limelog("invalid iroh node address: %s\n", serverInfo->address);
+        err = -1;
+        goto Cleanup;
+    }
 
     // Parse RTSP port number from RTSP session URL
     if (!parseRtspPortNumberFromUrl(serverInfo->rtspSessionUrl, &RtspPortNumber)) {
