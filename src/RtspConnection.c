@@ -402,7 +402,7 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
         return ret;
     }
 
-    send_buffer.ptr = (uint8_t *) &serializedMessage;
+    send_buffer.ptr = (uint8_t *) serializedMessage;
     send_buffer.len = messageLen;
     err = send_stream_write(&sendControlStream, send_buffer);
     if (err != 0) {
