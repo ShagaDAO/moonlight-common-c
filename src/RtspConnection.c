@@ -409,6 +409,11 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
         Limelog("Failed to send RTSP message: %d\n", err);
         goto Exit;
     }
+    // We are done sending, so close the stream.
+    if (sendControlStream != NULL) {
+        send_stream_finish(sendControlStream);
+        sendControlStream = NULL;
+    }
 
     // Read the next response.
     // This is done by reading to end and then closing the recv side.
@@ -442,11 +447,6 @@ Exit:
 
     rust_buffer_free(recvBuffer);
 
-    // We are done sending, so close the stream.
-    if (sendControlStream != NULL) {
-        send_stream_finish(sendControlStream);
-        sendControlStream = NULL;
-    }
     if (recvControlStream != NULL) {
         recv_stream_free(recvControlStream);
         recvControlStream = NULL;
