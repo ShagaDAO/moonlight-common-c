@@ -1299,9 +1299,6 @@ static void lossStatsThreadFunc(void* context) {
             if (IS_SUNSHINE()) {
                 PQUEUED_FRAME_FEC_STATUS queuedFrameStatus;
 
-                // Sunshine should always use ENet for control messages
-                LC_ASSERT(peer != NULL);
-
                 while (LbqPollQueueElement(&frameFecStatusQueue, (void**)&queuedFrameStatus) == LBQ_SUCCESS) {
                     // Send as an unreliable packet, since it's not a critical message
 
