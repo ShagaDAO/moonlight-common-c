@@ -512,6 +512,9 @@ typedef struct _SERVER_INFORMATION {
 
     // Specifies the 'ServerCodecModeSupport' from the /serverinfo response.
     int serverCodecModeSupport;
+
+    // Iroh node address
+    const char* irohNodeAddress;
 } SERVER_INFORMATION, *PSERVER_INFORMATION;
 
 // Use this function to zero the server information when allocated on the stack or heap
