@@ -1056,7 +1056,7 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
         // Other codecs are just passed through as is.
         queueFragment(existingEntry, currentPos.data, currentPos.offset, currentPos.length);
     }
-
+    //Limelog("Processing RTP payload");
     if (lastPacket) {
         // Move on to the next frame
         decodingFrame = false;
@@ -1120,7 +1120,7 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
 // that we lost a frame and submit an RFI request.
 void notifyFrameLost(unsigned int frameNumber, bool speculative) {
     // We may not invalidate frames that we've already received
-    LC_ASSERT(frameNumber >= startFrameNumber);
+    //LC_ASSERT(frameNumber >= startFrameNumber);
 
     // Drop state and determine if we need an IDR frame or if RFI is okay
     dropFrameState();

@@ -12,6 +12,7 @@
 #include "ByteBuffer.h"
 
 #include <enet/enet.h>
+#include <irohnet.h>
 
 // Common globals
 extern char* RemoteAddrString;
@@ -37,6 +38,7 @@ extern uint16_t RtspPortNumber;
 extern uint16_t ControlPortNumber;
 extern uint16_t AudioPortNumber;
 extern uint16_t VideoPortNumber;
+extern NodeAddr_t IrohServerNodeAddr;
 
 extern SS_PING AudioPingPayload;
 extern SS_PING VideoPingPayload;
@@ -114,7 +116,7 @@ void setRecorderCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDER
 
 char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length);
 
-int initializeControlStream(void);
+int initializeControlStream(char * addr, MagicEndpoint_t * ep);
 int startControlStream(void);
 int stopControlStream(void);
 void destroyControlStream(void);
@@ -122,11 +124,11 @@ void connectionDetectedFrameLoss(uint32_t startFrame, uint32_t endFrame);
 void connectionReceivedCompleteFrame(uint32_t frameIndex);
 void connectionSawFrame(uint32_t frameIndex);
 void connectionSendFrameFecStatus(PSS_FRAME_FEC_STATUS fecStatus);
-int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData);
+int sendInputPacketOnControlStream(unsigned char* data, int length);
 void flushInputOnControlStream(void);
 bool isControlDataInTransit(void);
 
-int performRtspHandshake(PSERVER_INFORMATION serverInfo);
+int performRtspHandshake(PSERVER_INFORMATION serverInfo, Connection_t* irohConnection);
 
 void initializeVideoDepacketizer(int pktSize);
 void destroyVideoDepacketizer(void);
@@ -135,13 +137,13 @@ void stopVideoDepacketizer(void);
 void requestDecoderRefresh(void);
 void notifyFrameLost(unsigned int frameNumber, bool speculative);
 
-void initializeVideoStream(void);
+void initializeVideoStream(MagicEndpoint_t*);
 void destroyVideoStream(void);
 void notifyKeyFrameReceived(void);
-int startVideoStream(void* rendererContext, int drFlags);
+int startVideoStream(void* rendererContext, int drFlags, char *nodeAddress);
 void stopVideoStream(void);
 
-int initializeAudioStream(void);
+int initializeAudioStream(MagicEndpoint_t*);
 int notifyAudioPortNegotiationComplete(void);
 void destroyAudioStream(void);
 int startAudioStream(void* audioContext, int arFlags);

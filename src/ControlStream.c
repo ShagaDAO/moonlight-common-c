@@ -66,11 +66,16 @@ typedef struct _QUEUED_ASYNC_CALLBACK {
     LINKED_BLOCKING_QUEUE_ENTRY entry;
 } QUEUED_ASYNC_CALLBACK, *PQUEUED_ASYNC_CALLBACK;
 
-static SOCKET ctlSock = INVALID_SOCKET;
-static ENetHost* client;
-static ENetPeer* peer;
+// static SOCKET ctlSock = INVALID_SOCKET;
+// static ENetHost* client;
+// static ENetPeer* peer;
 static PLT_MUTEX enetMutex;
 static bool usePeriodicPing;
+
+static Connection_t* irohConnection = NULL;
+static RecvStream_t* irohRecvStream = NULL;
+static SendStream_t* irohSendStream = NULL;
+// TODO: check if we need a mutex for sendstream and recvstream
 
 static PLT_THREAD lossStatsThread;
 static PLT_THREAD invalidateRefFramesThread;
@@ -275,15 +280,32 @@ static bool supportsIdrFrameRequest;
 #define PERIODIC_PING_INTERVAL_MS 100
 
 // Initializes the control stream
-int initializeControlStream(void) {
+int initializeControlStream(char* nodeAddress, MagicEndpoint_t *ep) {
     stopping = false;
+
+
+
+    char videoAlpn[] = "/moonlight/control/1";
+    slice_ref_uint8_t videoAlpnSlice;
+    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
+    videoAlpnSlice.len = strlen(videoAlpn);
+
+    IrohServerNodeAddr = node_addr_default();
+    int err = node_addr_from_string(nodeAddress, &IrohServerNodeAddr);
+    irohConnection = connection_default();
+    err = magic_endpoint_connect(&ep, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
+
+
+
     PltCreateEvent(&idrFrameRequiredEvent);
     LbqInitializeLinkedBlockingQueue(&invalidReferenceFrameTuples, 20);
     LbqInitializeLinkedBlockingQueue(&frameFecStatusQueue, 8); // Limits number of frame status reports per periodic ping interval
     LbqInitializeLinkedBlockingQueue(&asyncCallbackQueue, 30);
     PltCreateMutex(&enetMutex);
 
-    encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
+      // encryptedControlStream = APP_VERSION_AT_LEAST(7, 1, 431);
+    // no encryption with iroh
+    encryptedControlStream = false;
 
     if (AppVersionQuad[0] == 3) {
         packetTypes = (short*)packetTypesGen3;
@@ -356,6 +378,16 @@ void destroyControlStream(void) {
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&invalidReferenceFrameTuples));
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&frameFecStatusQueue));
     freeBasicLbqList(LbqDestroyLinkedBlockingQueue(&asyncCallbackQueue));
+
+    if (irohSendStream != NULL) {
+       // send_stream_finish(irohSendStream);
+        irohSendStream = NULL;
+    }
+
+    if (irohRecvStream != NULL) {
+       // recv_stream_free(irohRecvStream);
+        irohRecvStream = NULL;
+    }
 
     PltDeleteMutex(&enetMutex);
 }
@@ -468,7 +500,7 @@ void connectionSawFrame(uint32_t frameIndex) {
     lastSeenFrame = frameIndex;
 }
 
-// Reads an NV control stream packet from the TCP connection
+/*// Reads an NV control stream packet from the TCP connection
 static PNVCTL_TCP_PACKET_HEADER readNvctlPacketTcp(void) {
     NVCTL_TCP_PACKET_HEADER staticHeader;
     PNVCTL_TCP_PACKET_HEADER fullPacket;
@@ -497,9 +529,9 @@ static PNVCTL_TCP_PACKET_HEADER readNvctlPacketTcp(void) {
     }
 
     return fullPacket;
-}
+}*/
 
-static bool encryptControlMessage(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, PNVCTL_ENET_PACKET_HEADER_V2 packet) {
+/*static bool encryptControlMessage(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, PNVCTL_ENET_PACKET_HEADER_V2 packet) {
     unsigned char iv[16] = { 0 };
     int ivSize;
     int encryptedSize = sizeof(*packet) + packet->payloadLength;
@@ -542,8 +574,9 @@ static bool encryptControlMessage(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, PNVC
                              (unsigned char*)(encPacket + 1), AES_GCM_TAG_LENGTH, // Write tag into the space after the encrypted header
                              (unsigned char*)packet, encryptedSize,
                              ((unsigned char*)(encPacket + 1)) + AES_GCM_TAG_LENGTH, &encryptedSize); // Write ciphertext after the GCM tag
-}
+}*/
 
+/*
 // Caller must free() *packet on success!!!
 static bool decryptControlMessageToV1(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, int encPacketLength, PNVCTL_ENET_PACKET_HEADER_V1* packet, int* packetLength) {
     unsigned char iv[16] = { 0 };
@@ -615,15 +648,18 @@ static bool decryptControlMessageToV1(PNVCTL_ENCRYPTED_PACKET_HEADER encPacket, 
 
     return true;
 }
+*/
 
+/*
 static void enetPacketFreeCb(ENetPacket* packet) {
     if (packet->userData) {
         // userData contains a bool that we will set when freed
         *(volatile bool*)packet->userData = true;
     }
-}
+}*/
 
 
+/*
 // Must be called with enetMutex held
 static bool isPacketSentWaitingForAck(ENetPacket* packet) {
     ENetOutgoingCommand* outgoingCommand = NULL;
@@ -642,8 +678,43 @@ static bool isPacketSentWaitingForAck(ENetPacket* packet) {
 
     return false;
 }
+*/
+static bool sendMessageIroh(short ptype, short paylen, const void* payload) {
+    int err;
 
-static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
+    // prepare packet
+    PNVCTL_TCP_PACKET_HEADER packet;
+    packet = malloc(sizeof(*packet) + paylen);
+    if (packet == NULL) {
+        return false;
+    }
+    packet->type = LE16(ptype);
+    packet->payloadLength = LE16(paylen);
+    memcpy(&packet[1], payload, paylen);
+
+    // prepare buffer for iroh send
+    slice_ref_uint8_t buffer;
+    buffer.ptr = (uint8_t *) packet;
+    buffer.len = sizeof(*packet) + paylen;
+
+    // -- Lock Start
+    PltLockMutex(&enetMutex);
+    Limelog(" Packet length %d %d", sizeof(*packet), paylen);
+    // Queue the packet to be sent
+    err = connection_write_datagram(&irohConnection, buffer);
+
+    // -- Lock End
+    PltUnlockMutex(&enetMutex);
+
+    if (err != 0) {
+        Limelog("Failed to send iroh control packet\n");
+        return false;
+    }
+
+    return true;
+}
+
+/*static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
     ENetPacket* enetPacket;
     int err;
 
@@ -770,9 +841,9 @@ static bool sendMessageEnet(short ptype, short paylen, const void* payload, uint
     }
 
     return true;
-}
+}*/
 
-static bool sendMessageTcp(short ptype, short paylen, const void* payload) {
+/*static bool sendMessageTcp(short ptype, short paylen, const void* payload) {
     PNVCTL_TCP_PACKET_HEADER packet;
     SOCK_RET err;
 
@@ -795,25 +866,31 @@ static bool sendMessageTcp(short ptype, short paylen, const void* payload) {
     }
 
     return true;
-}
+}*/
 
-static bool sendMessageAndForget(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
+static bool sendMessageAndForget(short ptype, short paylen, const void* payload) {
     bool ret;
+    Limelog("Sending message on iroh control channel %d %d %s ", ptype , paylen, payload);
+    ret = sendMessageIroh(ptype, paylen, payload);
 
     // Unlike regular sockets, ENet sockets aren't safe to invoke from multiple
     // threads at once. We have to synchronize them with a lock.
-    if (AppVersionQuad[0] >= 5) {
+    /*if (AppVersionQuad[0] >= 5) {
         ret = sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData);
     }
     else {
         ret = sendMessageTcp(ptype, paylen, payload);
-    }
+    }*/
 
     return ret;
 }
 
-static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload, uint8_t channelId, uint32_t flags, bool moreData) {
-    if (AppVersionQuad[0] >= 5) {
+static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* payload) {
+    return true;
+    if (!sendMessageIroh(ptype, paylen, payload)) {
+        return false;
+    }
+    /*if (AppVersionQuad[0] >= 5) {
         if (!sendMessageEnet(ptype, paylen, payload, channelId, flags, moreData)) {
             return false;
         }
@@ -832,11 +909,12 @@ static bool sendMessageAndDiscardReply(short ptype, short paylen, const void* pa
         }
 
         free(reply);
-    }
+    }*/
 
     return true;
 }
 
+/*
 // This intercept function drops disconnect events to allow us to process
 // pending receives first. It works around what appears to be a bug in ENet
 // where pending disconnects can cause loss of unprocessed received data.
@@ -857,6 +935,7 @@ static int ignoreDisconnectIntercept(ENetHost* host, ENetEvent* event) {
 
     return 0;
 }
+*/
 
 static void asyncCallbackThreadFunc(void* context) {
     PQUEUED_ASYNC_CALLBACK queuedCb, nextCb;
@@ -974,7 +1053,7 @@ static bool needsAsyncCallback(unsigned short packetType) {
            packetType == packetTypes[IDX_HDR_INFO];
 }
 
-static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLength) {
+static void queueAsyncCallback(PNVCTL_TCP_PACKET_HEADER ctlHdr, int packetLength) {
     BYTE_BUFFER bb;
     PQUEUED_ASYNC_CALLBACK queuedCb;
     int err;
@@ -1037,272 +1116,186 @@ static void queueAsyncCallback(PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr, int packetLe
 }
 
 static void controlReceiveThreadFunc(void* context) {
-    int err;
-
-    // This is only used for ENet
-    if (AppVersionQuad[0] < 5) {
-        return;
-    }
+    int64_t err;
 
     while (!PltIsThreadInterrupted(&controlReceiveThread)) {
-        ENetEvent event;
-        enet_uint32 waitTimeMs;
+        // TODO: mutex for read and write seperately
 
+        // 1. read header
+        PNVCTL_TCP_PACKET_HEADER ctlHdr;
+
+        uint8_t * recvBuffer = malloc(sizeof(*ctlHdr));
+        slice_mut_uint8_t recvBufferSlice;
+        recvBufferSlice.ptr = recvBuffer;
+        recvBufferSlice.len = sizeof(*ctlHdr);
+
+        // -- Lock Start
         PltLockMutex(&enetMutex);
 
-        // Poll for new packets and process retransmissions
-        err = serviceEnetHost(client, &event, 0);
+        // read incoming data
+        err = recv_stream_read(&irohRecvStream, recvBufferSlice);
 
-        // Compute the next time we need to wake up to handle
-        // the RTO timer or a ping.
-        if (err == 0) {
-            if (ENET_TIME_LESS(peer->nextTimeout, client->serviceTime)) {
-                // This can happen when we have no unacked reliable messages
-                waitTimeMs = 10;
-            }
-            else {
-                // We add 1 ms just to ensure we're unlikely to undershoot the sleep() and have to
-                // do a tiny sleep for another iteration before the timeout is ready to be serviced.
-                waitTimeMs = ENET_TIME_DIFFERENCE(peer->nextTimeout, client->serviceTime) + 1;
-                if (waitTimeMs > peer->pingInterval) {
-                    waitTimeMs = peer->pingInterval;
-                }
-            }
-        }
-
+        // -- Lock End
         PltUnlockMutex(&enetMutex);
 
-        if (err == 0) {
-            // Handle a pending disconnect after unsuccessfully polling
-            // for new events to handle.
-            if (disconnectPending) {
-                PltLockMutex(&enetMutex);
-                // Wait 100 ms for pending receives after a disconnect and
-                // 1 second for the pending disconnect to be processed after
-                // removing the intercept callback.
-                err = serviceEnetHost(client, &event, client->intercept ? 100 : 1000);
-                if (err == 0) {
-                    if (client->intercept) {
-                        // Now that no pending receive events remain, we can
-                        // remove our intercept hook and allow the server's
-                        // disconnect to be processed as expected. We will wait
-                        // 1 second for this disconnect to be processed before
-                        // we tear down the connection anyway.
-                        client->intercept = NULL;
-                        PltUnlockMutex(&enetMutex);
-                        continue;
-                    }
-                    else {
-                        // The 1 second timeout has expired with no disconnect event
-                        // retransmission after the first notification. We can only
-                        // assume the server died tragically, so go ahead and tear down.
-                        PltUnlockMutex(&enetMutex);
-                        Limelog("Disconnect event timeout expired\n");
-                        ListenerCallbacks.connectionTerminated(-1);
-                        return;
-                    }
-                }
-                else {
-                    PltUnlockMutex(&enetMutex);
-                }
-            }
-            else {
-                // No events ready - wait for readability or a local RTO timer to expire
-                enet_uint32 condition = ENET_SOCKET_WAIT_RECEIVE;
-                enet_socket_wait(client->socket, &condition, waitTimeMs);
-                continue;
-            }
+        if (err < 0) {
+            LC_ASSERT(err == -1);
+            Limelog("Control recv stream connection failed: %d\n", err);
+            ListenerCallbacks.connectionTerminated(err);
+            free(recvBuffer);
+            return;
         }
+
+        if (err < (int64_t)sizeof(*ctlHdr)) {
+            Limelog("Discarding runt control packet: %d < %d\n", err, (int)sizeof(*ctlHdr));
+            free(recvBuffer);
+            continue;
+        }
+
+        ctlHdr = (PNVCTL_TCP_PACKET_HEADER)recvBuffer;
+        ctlHdr->type = LE16(ctlHdr->type);
+
+        // 2. Read actual packet
+
+        uint8_t * recvBuffer2 = malloc(sizeof(*ctlHdr) + ctlHdr->payloadLength);
+        recvBufferSlice.ptr = recvBuffer2 + sizeof(*ctlHdr);
+        recvBufferSlice.len = ctlHdr->payloadLength;
+
+        // -- Lock Start
+        PltLockMutex(&enetMutex);
+
+        // read incoming data
+        err = recv_stream_read(&irohRecvStream, recvBufferSlice);
+
+        // -- Lock End
+        PltUnlockMutex(&enetMutex);
 
         if (err < 0) {
-            // The error from serviceEnetHost() should be propagated via LastSocketError()
             LC_ASSERT(err == -1);
-
-            err = LastSocketFail();
-            Limelog("Control stream connection failed: %d\n", err);
+            Limelog("Control recv stream connection failed: %d\n", err);
             ListenerCallbacks.connectionTerminated(err);
+            free(recvBuffer2);
+            free(ctlHdr);
             return;
         }
 
-        if (event.type == ENET_EVENT_TYPE_RECEIVE) {
-            PNVCTL_ENET_PACKET_HEADER_V1 ctlHdr;
-            int packetLength;
+        if (err != ctlHdr->payloadLength) {
+            Limelog("Discarding runt control packet: %d != %d\n", err, ctlHdr->payloadLength);
+            free(recvBuffer2);
+            free(ctlHdr);
+            continue;
+        }
 
-            if (event.packet->dataLength < sizeof(*ctlHdr)) {
-                Limelog("Discarding runt control packet: %d < %d\n", event.packet->dataLength, (int)sizeof(*ctlHdr));
-                enet_packet_destroy(event.packet);
-                continue;
+        // add the ctlHdr to the beginning of recvBuffer
+        memcpy(recvBuffer2, &ctlHdr, sizeof(*ctlHdr));
+        free(ctlHdr);
+        ctlHdr = (PNVCTL_TCP_PACKET_HEADER)recvBuffer2;
+        // TODO: is this including the header?
+        int packetLength = sizeof(*ctlHdr) + err;
+
+        // Process HDR data immediately to update global HDR enabled state and HDR metadata.
+        // The actual client callback will be invoked in the async callback thread.
+        if (ctlHdr->type == packetTypes[IDX_HDR_INFO]) {
+            BYTE_BUFFER bb;
+            uint8_t enableByte;
+
+            BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
+
+            BbGet8(&bb, &enableByte);
+            if (IS_SUNSHINE()) {
+                // Zero the metadata buffer to properly handle older servers if we have to add new fields
+                memset(&hdrMetadata, 0, sizeof(hdrMetadata));
+
+                // Sunshine sends HDR metadata in this message too
+                for (int i = 0; i < 3; i++) {
+                    BbGet16(&bb, &hdrMetadata.displayPrimaries[i].x);
+                    BbGet16(&bb, &hdrMetadata.displayPrimaries[i].y);
+                }
+                BbGet16(&bb, &hdrMetadata.whitePoint.x);
+                BbGet16(&bb, &hdrMetadata.whitePoint.y);
+                BbGet16(&bb, &hdrMetadata.maxDisplayLuminance);
+                BbGet16(&bb, &hdrMetadata.minDisplayLuminance);
+                BbGet16(&bb, &hdrMetadata.maxContentLightLevel);
+                BbGet16(&bb, &hdrMetadata.maxFrameAverageLightLevel);
+                BbGet16(&bb, &hdrMetadata.maxFullFrameLuminance);
             }
 
-            ctlHdr = (PNVCTL_ENET_PACKET_HEADER_V1)event.packet->data;
-            ctlHdr->type = LE16(ctlHdr->type);
+            hdrEnabled = (enableByte != 0);
+        }
 
-            if (encryptedControlStream) {
-                // V2 headers can be interpreted as V1 headers for the purpose of examining type,
-                // so this check is safe.
-                if (ctlHdr->type == 0x0001) {
-                    PNVCTL_ENCRYPTED_PACKET_HEADER encHdr;
+        // Process client callbacks in a separate thread
+        if (needsAsyncCallback(ctlHdr->type)) {
+          queueAsyncCallback(ctlHdr, packetLength);
+        }
+        else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
+            BYTE_BUFFER bb;
 
-                    if (event.packet->dataLength < sizeof(NVCTL_ENCRYPTED_PACKET_HEADER)) {
-                        Limelog("Discarding runt encrypted control packet: %d < %d\n", event.packet->dataLength, (int)sizeof(NVCTL_ENCRYPTED_PACKET_HEADER));
-                        enet_packet_destroy(event.packet);
-                        continue;
-                    }
+            uint32_t terminationErrorCode;
 
-                    // encryptedHeaderType is already byteswapped by aliasing through ctlHdr above
-                    encHdr = (PNVCTL_ENCRYPTED_PACKET_HEADER)event.packet->data;
-                    encHdr->length = LE16(encHdr->length);
-                    encHdr->seq = LE32(encHdr->seq);
+            if (packetLength >= 6) {
+              // This is the extended termination message which contains a full HRESULT
+              BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_BIG);
+              BbGet32(&bb, &terminationErrorCode);
 
-                    ctlHdr = NULL;
-                    packetLength = (int)event.packet->dataLength;
-                    if (!decryptControlMessageToV1(encHdr, packetLength, &ctlHdr, &packetLength)) {
-                        Limelog("Failed to decrypt control packet of size %d\n", event.packet->dataLength);
-                        enet_packet_destroy(event.packet);
-                        continue;
-                    }
+              Limelog("Server notified termination reason: 0x%08x\n", terminationErrorCode);
 
-                    // We need to byteswap the unsealed header too
-                    ctlHdr->type = LE16(ctlHdr->type);
-                }
-                else {
-                    LC_ASSERT_VT(false);
-                    Limelog("Discarding unencrypted packet on encrypted control stream: %04x\n", ctlHdr->type);
-                    enet_packet_destroy(event.packet);
-                    continue;
-                }
+              // Normalize the termination error codes for specific values we recognize
+              switch (terminationErrorCode) {
+              case 0x800e9403: // NVST_DISCONN_SERVER_VIDEO_ENCODER_CONVERT_INPUT_FRAME_FAILED
+                  terminationErrorCode = ML_ERROR_FRAME_CONVERSION;
+                  break;
+              case 0x800e9302: // NVST_DISCONN_SERVER_VFP_PROTECTED_CONTENT
+                  terminationErrorCode = ML_ERROR_PROTECTED_CONTENT;
+                  break;
+              case 0x80030023: // NVST_DISCONN_SERVER_TERMINATED_CLOSED
+                  if (lastSeenFrame != 0) {
+                      // Pass error code 0 to notify the client that this was not an error
+                    terminationErrorCode = ML_ERROR_GRACEFUL_TERMINATION;
+                  }
+                  else {
+                      // We never saw a frame, so this is probably an error that caused
+                    // NvStreamer to terminate prior to sending any frames.
+                    terminationErrorCode = ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
+                  }
+                  break;
+              default:
+                  break;
+              }
             }
             else {
-                // Take ownership of the packet data directly for the non-encrypted case
-                packetLength = (int)event.packet->dataLength;
-                event.packet->data = NULL;
-            }
+                uint16_t terminationReason;
 
-            // We're done with the packet struct
-            enet_packet_destroy(event.packet);
-
-            // All below codepaths must free ctlHdr!!!
-
-            // Process HDR data immediately to update global HDR enabled state and HDR metadata.
-            // The actual client callback will be invoked in the async callback thread.
-            if (ctlHdr->type == packetTypes[IDX_HDR_INFO]) {
-                BYTE_BUFFER bb;
-                uint8_t enableByte;
-
+                // This is the short termination message
                 BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
+                BbGet16(&bb, &terminationReason);
 
-                BbGet8(&bb, &enableByte);
-                if (IS_SUNSHINE()) {
-                    // Zero the metadata buffer to properly handle older servers if we have to add new fields
-                    memset(&hdrMetadata, 0, sizeof(hdrMetadata));
+                Limelog("Server notified termination reason: 0x%04x\n", terminationReason);
 
-                    // Sunshine sends HDR metadata in this message too
-                    for (int i = 0; i < 3; i++) {
-                        BbGet16(&bb, &hdrMetadata.displayPrimaries[i].x);
-                        BbGet16(&bb, &hdrMetadata.displayPrimaries[i].y);
+                // SERVER_TERMINATED_INTENDED
+                if (terminationReason == 0x0100) {
+                    if (lastSeenFrame != 0) {
+                      // Pass error code 0 to notify the client that this was not an error
+                      terminationErrorCode = ML_ERROR_GRACEFUL_TERMINATION;
                     }
-                    BbGet16(&bb, &hdrMetadata.whitePoint.x);
-                    BbGet16(&bb, &hdrMetadata.whitePoint.y);
-                    BbGet16(&bb, &hdrMetadata.maxDisplayLuminance);
-                    BbGet16(&bb, &hdrMetadata.minDisplayLuminance);
-                    BbGet16(&bb, &hdrMetadata.maxContentLightLevel);
-                    BbGet16(&bb, &hdrMetadata.maxFrameAverageLightLevel);
-                    BbGet16(&bb, &hdrMetadata.maxFullFrameLuminance);
-                }
-
-                hdrEnabled = (enableByte != 0);
-            }
-
-            // Process client callbacks in a separate thread
-            if (needsAsyncCallback(ctlHdr->type)) {
-                queueAsyncCallback(ctlHdr, packetLength);
-            }
-            else if (ctlHdr->type == packetTypes[IDX_TERMINATION]) {
-                BYTE_BUFFER bb;
-
-
-                uint32_t terminationErrorCode;
-
-                if (packetLength >= 6) {
-                    // This is the extended termination message which contains a full HRESULT
-                    BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_BIG);
-                    BbGet32(&bb, &terminationErrorCode);
-
-                    Limelog("Server notified termination reason: 0x%08x\n", terminationErrorCode);
-
-                    // Normalize the termination error codes for specific values we recognize
-                    switch (terminationErrorCode) {
-                    case 0x800e9403: // NVST_DISCONN_SERVER_VIDEO_ENCODER_CONVERT_INPUT_FRAME_FAILED
-                        terminationErrorCode = ML_ERROR_FRAME_CONVERSION;
-                        break;
-                    case 0x800e9302: // NVST_DISCONN_SERVER_VFP_PROTECTED_CONTENT
-                        terminationErrorCode = ML_ERROR_PROTECTED_CONTENT;
-                        break;
-                    case 0x80030023: // NVST_DISCONN_SERVER_TERMINATED_CLOSED
-                        if (lastSeenFrame != 0) {
-                            // Pass error code 0 to notify the client that this was not an error
-                            terminationErrorCode = ML_ERROR_GRACEFUL_TERMINATION;
-                        }
-                        else {
-                            // We never saw a frame, so this is probably an error that caused
-                            // NvStreamer to terminate prior to sending any frames.
-                            terminationErrorCode = ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
-                        }
-                        break;
-                    default:
-                        break;
+                    else {
+                        // We never saw a frame, so this is probably an error that caused
+                      // NvStreamer to terminate prior to sending any frames.
+                      terminationErrorCode = ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
                     }
                 }
                 else {
-                    uint16_t terminationReason;
-
-                    // This is the short termination message
-                    BbInitializeWrappedBuffer(&bb, (char*)ctlHdr, sizeof(*ctlHdr), packetLength - sizeof(*ctlHdr), BYTE_ORDER_LITTLE);
-                    BbGet16(&bb, &terminationReason);
-
-                    Limelog("Server notified termination reason: 0x%04x\n", terminationReason);
-
-                    // SERVER_TERMINATED_INTENDED
-                    if (terminationReason == 0x0100) {
-                        if (lastSeenFrame != 0) {
-                            // Pass error code 0 to notify the client that this was not an error
-                            terminationErrorCode = ML_ERROR_GRACEFUL_TERMINATION;
-                        }
-                        else {
-                            // We never saw a frame, so this is probably an error that caused
-                            // NvStreamer to terminate prior to sending any frames.
-                            terminationErrorCode = ML_ERROR_UNEXPECTED_EARLY_TERMINATION;
-                        }
-                    }
-                    else {
-                        // Otherwise pass the reason unmodified
-                        terminationErrorCode = terminationReason;
-                    }
+                    // Otherwise pass the reason unmodified
+                  terminationErrorCode = terminationReason;
                 }
-
-                // We used to wait for a ENET_EVENT_TYPE_DISCONNECT event, but since
-                // GFE 3.20.3.63 we don't get one for 10 seconds after we first get
-                // this termination message. The termination message should be reliable
-                // enough to end the stream now, rather than waiting for an explicit
-                // disconnect. The server will also not acknowledge our disconnect
-                // message once it sends this message, so we mark the peer as fully
-                // disconnected now to avoid delays waiting for an ack that will
-                // never arrive.
-                PltLockMutex(&enetMutex);
-                enet_peer_disconnect_now(peer, 0);
-                PltUnlockMutex(&enetMutex);
-                ListenerCallbacks.connectionTerminated((int)terminationErrorCode);
-                free(ctlHdr);
-                return;
             }
 
+            // TODO: should we close the streams here?
+            ListenerCallbacks.connectionTerminated((int)terminationErrorCode);
             free(ctlHdr);
-        }
-        else if (event.type == ENET_EVENT_TYPE_DISCONNECT) {
-            Limelog("Control stream received unexpected disconnect event\n");
-            ListenerCallbacks.connectionTerminated(-1);
             return;
         }
+
+        free(ctlHdr);
     }
 }
 
@@ -1322,11 +1315,21 @@ static void lossStatsThreadFunc(void* context) {
                 PQUEUED_FRAME_FEC_STATUS queuedFrameStatus;
 
                 // Sunshine should always use ENet for control messages
-                LC_ASSERT(peer != NULL);
+                //LC_ASSERT(peer != NULL);
 
                 while (LbqPollQueueElement(&frameFecStatusQueue, (void**)&queuedFrameStatus) == LBQ_SUCCESS) {
                     // Send as an unreliable packet, since it's not a critical message
-                    if (!sendMessageEnet(SS_FRAME_FEC_PTYPE,
+
+                    if (!sendMessageIroh(SS_FRAME_FEC_PTYPE,
+                                         sizeof(queuedFrameStatus->fecStatus),
+                                         &queuedFrameStatus->fecStatus)) {
+                        Limelog("Loss Stats: Sending frame FEC status message failed: %d\n", (int)LastSocketError());
+                        ListenerCallbacks.connectionTerminated(LastSocketFail());
+                        free(queuedFrameStatus);
+                        return;
+                    }
+
+                    /*if (!sendMessageEnet(SS_FRAME_FEC_PTYPE,
                                          sizeof(queuedFrameStatus->fecStatus),
                                          &queuedFrameStatus->fecStatus,
                                          CTRL_CHANNEL_GENERIC,
@@ -1336,7 +1339,7 @@ static void lossStatsThreadFunc(void* context) {
                         ListenerCallbacks.connectionTerminated(LastSocketFail());
                         free(queuedFrameStatus);
                         return;
-                    }
+                    }*/
 
                     free(queuedFrameStatus);
                 }
@@ -1348,16 +1351,13 @@ static void lossStatsThreadFunc(void* context) {
             // regularly. This only happens when an ACK is received to a reliable packet.
             // Since the other traffic on this channel is unsequenced, it doesn't really
             // cause any negative HOL blocking side-effects.
-            if (!sendMessageAndForget(0x0200,
-                                      sizeof(periodicPingPayload),
-                                      periodicPingPayload,
-                                      CTRL_CHANNEL_GENERIC,
-                                      ENET_PACKET_FLAG_RELIABLE,
-                                      false)) {
-                Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
-                ListenerCallbacks.connectionTerminated(LastSocketFail());
-                return;
-            }
+            // if (!sendMessageAndForget(0x0200,
+            //                           sizeof(periodicPingPayload),
+            //                           periodicPingPayload)) {
+            //     Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
+            //     ListenerCallbacks.connectionTerminated(LastSocketFail());
+            //     return;
+            // }
 
             // Wait a bit
             PltSleepMsInterruptible(&lossStatsThread, PERIODIC_PING_INTERVAL_MS);
@@ -1388,17 +1388,14 @@ static void lossStatsThreadFunc(void* context) {
             BbPut32(&byteBuffer, 0x14);
 
             // Send the message (and don't expect a response)
-            if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
-                                      payloadLengths[IDX_LOSS_STATS],
-                                      lossStatsPayload,
-                                      CTRL_CHANNEL_GENERIC,
-                                      0,
-                                      false)) {
-                free(lossStatsPayload);
-                Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
-                ListenerCallbacks.connectionTerminated(LastSocketFail());
-                return;
-            }
+            // if (!sendMessageAndForget(packetTypes[IDX_LOSS_STATS],
+            //                           payloadLengths[IDX_LOSS_STATS],
+            //                           lossStatsPayload)) {
+            //     free(lossStatsPayload);
+            //     Limelog("Loss Stats: Transaction failed: %d\n", (int)LastSocketError());
+            //     ListenerCallbacks.connectionTerminated(LastSocketFail());
+            //     return;
+            // }
 
             // Wait a bit
             PltSleepMsInterruptible(&lossStatsThread, LOSS_REPORT_INTERVAL_MS);
@@ -1430,10 +1427,7 @@ static void requestIdrFrame(void) {
         // Send the reference frame invalidation request and read the response
         if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES],
                                         sizeof(payload),
-                                        payload,
-                                        CTRL_CHANNEL_URGENT,
-                                        ENET_PACKET_FLAG_RELIABLE,
-                                        false)) {
+                                        payload)) {
             Limelog("Request IDR Frame: Transaction failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             return;
@@ -1443,10 +1437,7 @@ static void requestIdrFrame(void) {
         // Send IDR frame request and read the response
         if (!sendMessageAndDiscardReply(packetTypes[IDX_REQUEST_IDR_FRAME],
                                         payloadLengths[IDX_REQUEST_IDR_FRAME],
-                                        preconstructedPayloads[IDX_REQUEST_IDR_FRAME],
-                                        CTRL_CHANNEL_URGENT,
-                                        ENET_PACKET_FLAG_RELIABLE,
-                                        false)) {
+                                        preconstructedPayloads[IDX_REQUEST_IDR_FRAME])) {
             Limelog("Request IDR Frame: Transaction failed: %d\n", (int)LastSocketError());
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             return;
@@ -1469,9 +1460,7 @@ static void requestInvalidateReferenceFrames(uint32_t startFrame, uint32_t endFr
     // Send the reference frame invalidation request and read the response
     if (!sendMessageAndDiscardReply(packetTypes[IDX_INVALIDATE_REF_FRAMES],
                                     sizeof(payload),
-                                    payload, CTRL_CHANNEL_URGENT,
-                                    ENET_PACKET_FLAG_RELIABLE,
-                                    false)) {
+                                    payload)) {
         Limelog("Request Invaldiate Reference Frames: Transaction failed: %d\n", (int)LastSocketError());
         ListenerCallbacks.connectionTerminated(LastSocketFail());
         return;
@@ -1538,9 +1527,9 @@ int stopControlStream(void) {
     // This must be set to stop in a timely manner
     LC_ASSERT(ConnectionInterrupted);
 
-    if (ctlSock != INVALID_SOCKET) {
+    /*if (ctlSock != INVALID_SOCKET) {
         shutdownTcpSocket(ctlSock);
-    }
+    }*/
 
     PltInterruptThread(&lossStatsThread);
     PltInterruptThread(&requestIdrFrameThread);
@@ -1564,7 +1553,7 @@ int stopControlStream(void) {
         PltCloseThread(&invalidateRefFramesThread);
     }
 
-    if (peer != NULL) {
+    /*if (peer != NULL) {
         // Gracefully disconnect to ensure the remote host receives all of our final
         // outbound traffic, including any key up events that might be sent.
         gracefullyDisconnectEnetPeer(client, peer, CONTROL_STREAM_LINGER_TIMEOUT_SEC * 1000);
@@ -1578,17 +1567,25 @@ int stopControlStream(void) {
     if (ctlSock != INVALID_SOCKET) {
         closeSocket(ctlSock);
         ctlSock = INVALID_SOCKET;
+    }*/
+    if (irohRecvStream != NULL) {
+      recv_stream_free(irohRecvStream);
+      irohRecvStream = NULL;
+    }
+    if (irohSendStream != NULL) {
+      send_stream_finish(irohSendStream);
+      irohSendStream = NULL;
     }
 
     return 0;
 }
 
 // Called by the input stream to send a packet for Gen 5+ servers
-int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t channelId, uint32_t flags, bool moreData) {
+int sendInputPacketOnControlStream(unsigned char* data, int length) {
     LC_ASSERT(AppVersionQuad[0] >= 5);
 
     // Send the input data (no reply expected)
-    if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data, channelId, flags, moreData) == 0) {
+    if (sendMessageAndForget(packetTypes[IDX_INPUT_DATA], length, data) == 0) {
         return -1;
     }
 
@@ -1597,23 +1594,23 @@ int sendInputPacketOnControlStream(unsigned char* data, int length, uint8_t chan
 
 // Called by the input stream to flush queued packets before a batching wait
 void flushInputOnControlStream(void) {
-    if (AppVersionQuad[0] >= 5) {
+  /*if (AppVersionQuad[0] >= 5) {
         PltLockMutex(&enetMutex);
         enet_host_flush(client);
         PltUnlockMutex(&enetMutex);
-    }
+        }*/
 }
 
 bool isControlDataInTransit(void) {
     bool ret = false;
 
-    PltLockMutex(&enetMutex);
+    /*PltLockMutex(&enetMutex);
     if (peer != NULL && peer->state == ENET_PEER_STATE_CONNECTED) {
         if (peer->reliableDataInTransit != 0) {
             ret = true;
         }
     }
-    PltUnlockMutex(&enetMutex);
+    PltUnlockMutex(&enetMutex);*/
 
     return ret;
 }
@@ -1621,19 +1618,16 @@ bool isControlDataInTransit(void) {
 bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVariance) {
     bool ret = false;
 
-    PltLockMutex(&enetMutex);
-    if (peer != NULL && peer->state == ENET_PEER_STATE_CONNECTED) {
+    if (irohConnection != NULL) {
         if (estimatedRtt != NULL) {
-            *estimatedRtt = peer->roundTripTime;
+            *estimatedRtt = connection_rtt(&irohConnection);
         }
-
         if (estimatedRttVariance != NULL) {
-            *estimatedRttVariance = peer->roundTripTimeVariance;
+            // not available
+            // *estimatedRttVariance = peer->roundTripTimeVariance;
         }
-
         ret = true;
     }
-    PltUnlockMutex(&enetMutex);
 
     return ret;
 }
@@ -1642,7 +1636,17 @@ bool LiGetEstimatedRttInfo(uint32_t* estimatedRtt, uint32_t* estimatedRttVarianc
 int startControlStream(void) {
     int err;
 
-    if (AppVersionQuad[0] >= 5) {
+    // establish iroh bi directional stream
+    irohSendStream = send_stream_default();
+    irohRecvStream = recv_stream_default();
+    err = connection_open_bi(&irohConnection, &irohSendStream, &irohRecvStream);
+    if (err != 0) {
+        Limelog("Failed to establish stream for control: %d\n", err);
+        stopping = true;
+        return -1;
+    }
+
+    /*if (AppVersionQuad[0] >= 5) {
         ENetAddress remoteAddress, localAddress;
         ENetEvent event;
 
@@ -1740,12 +1744,12 @@ int startControlStream(void) {
         }
 
         enableNoDelay(ctlSock);
-    }
+    }*/
 
-    err = PltCreateThread("ControlRecv", controlReceiveThreadFunc, NULL, &controlReceiveThread);
+   // err = PltCreateThread("ControlRecv", controlReceiveThreadFunc, NULL, &controlReceiveThread);
     if (err != 0) {
         stopping = true;
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1754,6 +1758,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
         return err;
     }
@@ -1761,18 +1773,17 @@ int startControlStream(void) {
     // Send START A
     if (!sendMessageAndDiscardReply(packetTypes[IDX_START_A],
                                     payloadLengths[IDX_START_A],
-                                    preconstructedPayloads[IDX_START_A],
-                                    CTRL_CHANNEL_GENERIC,
-                                    ENET_PACKET_FLAG_RELIABLE,
-                                    false)) {
+                                    preconstructedPayloads[IDX_START_A])) {
         Limelog("Start A failed: %d\n", (int)LastSocketError());
         err = LastSocketFail();
         stopping = true;
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
         }
         else {
+        */
+        if (irohSendStream == NULL) {
             ConnectionInterrupted = true;
         }
 
@@ -1780,7 +1791,7 @@ int startControlStream(void) {
         PltJoinThread(&controlReceiveThread);
         PltCloseThread(&controlReceiveThread);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1789,6 +1800,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
         return err;
     }
@@ -1796,18 +1815,17 @@ int startControlStream(void) {
     // Send START B
     if (!sendMessageAndDiscardReply(packetTypes[IDX_START_B],
                                     payloadLengths[IDX_START_B],
-                                    preconstructedPayloads[IDX_START_B],
-                                    CTRL_CHANNEL_GENERIC,
-                                    ENET_PACKET_FLAG_RELIABLE,
-                                    false)) {
+                                    preconstructedPayloads[IDX_START_B])) {
         Limelog("Start B failed: %d\n", (int)LastSocketError());
         err = LastSocketFail();
         stopping = true;
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
         }
         else {
+        */
+        if (irohSendStream == NULL) {
             ConnectionInterrupted = true;
         }
 
@@ -1815,7 +1833,7 @@ int startControlStream(void) {
         PltJoinThread(&controlReceiveThread);
         PltCloseThread(&controlReceiveThread);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1824,6 +1842,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
         return err;
     }
@@ -1832,10 +1858,11 @@ int startControlStream(void) {
     if (err != 0) {
         stopping = true;
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
         }
-        else {
+        else {*/
+        if (irohSendStream == NULL) {
             ConnectionInterrupted = true;
         }
 
@@ -1843,7 +1870,7 @@ int startControlStream(void) {
         PltJoinThread(&controlReceiveThread);
         PltCloseThread(&controlReceiveThread);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1852,6 +1879,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
         return err;
     }
@@ -1860,10 +1895,11 @@ int startControlStream(void) {
     if (err != 0) {
         stopping = true;
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
         }
-        else {
+        else {*/
+        if (irohSendStream == NULL) {
             ConnectionInterrupted = true;
         }
 
@@ -1875,7 +1911,7 @@ int startControlStream(void) {
         PltJoinThread(&controlReceiveThread);
         PltCloseThread(&controlReceiveThread);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1884,6 +1920,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
 
         return err;
@@ -1894,10 +1938,11 @@ int startControlStream(void) {
         stopping = true;
         PltSetEvent(&idrFrameRequiredEvent);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             shutdownTcpSocket(ctlSock);
         }
-        else {
+        else {*/
+        if (irohSendStream == NULL) {
             ConnectionInterrupted = true;
         }
 
@@ -1913,7 +1958,7 @@ int startControlStream(void) {
         PltJoinThread(&requestIdrFrameThread);
         PltCloseThread(&requestIdrFrameThread);
 
-        if (ctlSock != INVALID_SOCKET) {
+        /*if (ctlSock != INVALID_SOCKET) {
             closeSocket(ctlSock);
             ctlSock = INVALID_SOCKET;
         }
@@ -1922,6 +1967,14 @@ int startControlStream(void) {
             peer = NULL;
             enet_host_destroy(client);
             client = NULL;
+        }*/
+        if (irohRecvStream != NULL) {
+          recv_stream_free(irohRecvStream);
+          irohRecvStream = NULL;
+        }
+        if (irohSendStream != NULL) {
+          send_stream_finish(irohSendStream);
+          irohSendStream = NULL;
         }
 
         return err;
@@ -1935,10 +1988,13 @@ int startControlStream(void) {
             PltSetEvent(&idrFrameRequiredEvent);
             LbqSignalQueueShutdown(&asyncCallbackQueue);
 
-            if (ctlSock != INVALID_SOCKET) {
+            /*if (ctlSock != INVALID_SOCKET) {
                 shutdownTcpSocket(ctlSock);
             }
             else {
+                ConnectionInterrupted = true;
+            }*/
+            if (irohSendStream == NULL) {
                 ConnectionInterrupted = true;
             }
 
@@ -1958,7 +2014,7 @@ int startControlStream(void) {
             PltJoinThread(&asyncCallbackThread);
             PltCloseThread(&asyncCallbackThread);
 
-            if (ctlSock != INVALID_SOCKET) {
+            /*if (ctlSock != INVALID_SOCKET) {
                 closeSocket(ctlSock);
                 ctlSock = INVALID_SOCKET;
             }
@@ -1967,6 +2023,14 @@ int startControlStream(void) {
                 peer = NULL;
                 enet_host_destroy(client);
                 client = NULL;
+            }*/
+            if (irohRecvStream != NULL) {
+                recv_stream_free(irohRecvStream);
+                irohRecvStream = NULL;
+            }
+            if (irohSendStream != NULL) {
+                send_stream_finish(irohSendStream);
+                irohSendStream = NULL;
             }
 
             return err;

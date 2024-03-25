@@ -1,4 +1,5 @@
 #include "Limelight-internal.h"
+#include <irohnet.h>
 
 static int stage = STAGE_NONE;
 static ConnListenerConnectionTerminated originalTerminationCallback;
@@ -36,6 +37,13 @@ uint32_t SunshineFeatureFlags;
 uint32_t EncryptionFeaturesSupported;
 uint32_t EncryptionFeaturesRequested;
 uint32_t EncryptionFeaturesEnabled;
+char *irohNodeAddressTest = NULL;
+
+// iroh node addr
+NodeAddr_t IrohServerNodeAddr;
+
+MagicEndpoint_t * irohEndpoint, *irohEndpoint2;
+Connection_t* irohConnection, *irohAudioConnection, *irohVideoConnection, *controlConnection;
 
 // Connection stages
 static const char* stageNames[STAGE_MAX] = {
@@ -111,13 +119,15 @@ void LiStopConnection(void) {
     }
     if (stage == STAGE_CONTROL_STREAM_INIT) {
         Limelog("Cleaning up control stream...");
-        destroyControlStream();
+        //destroyControlStream();
         stage--;
         Limelog("done\n");
     }
     if (stage == STAGE_RTSP_HANDSHAKE) {
-        // Nothing to do
+        Limelog("Cleaning up handshake...");
+        connection_free(irohConnection);
         stage--;
+        Limelog("done\n");
     }
     if (stage == STAGE_AUDIO_STREAM_INIT) {
         Limelog("Cleaning up audio stream...");
@@ -126,8 +136,10 @@ void LiStopConnection(void) {
         Limelog("done\n");
     }
     if (stage == STAGE_NAME_RESOLUTION) {
-        // Nothing to do
+        Limelog("Cleaning up name resolution...");
+        magic_endpoint_free(irohEndpoint);
         stage--;
+        Limelog("done\n");
     }
     if (stage == STAGE_PLATFORM_INIT) {
         Limelog("Cleaning up platform...");
@@ -136,7 +148,7 @@ void LiStopConnection(void) {
         Limelog("done\n");
     }
     LC_ASSERT(stage == STAGE_NONE);
-    
+
     if (RemoteAddrString != NULL) {
         free(RemoteAddrString);
         RemoteAddrString = NULL;
@@ -268,6 +280,19 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ControlPortNumber = 0;
     AudioPortNumber = 0;
 
+    IrohServerNodeAddr = node_addr_default();
+
+    // reuse the address field from the server info
+    //char *nodeAddrToUse = TEST_NODE_ADDR;
+    err = node_addr_from_string(serverInfo->irohNodeAddress, &IrohServerNodeAddr);
+    irohNodeAddressTest = strdup(serverInfo->irohNodeAddress);
+    Limelog("connecting to %s", serverInfo->irohNodeAddress);
+    if (err != 0) {
+        Limelog("invalid iroh node address: %s\n", serverInfo->address);
+        err = -1;
+        goto Cleanup;
+    }
+
     // Parse RTSP port number from RTSP session URL
     if (!parseRtspPortNumberFromUrl(serverInfo->rtspSessionUrl, &RtspPortNumber)) {
         // Use the well known port if parsing fails
@@ -281,7 +306,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     alreadyTerminated = false;
     ConnectionInterrupted = false;
-    
+
     // Validate the audio configuration
     if (MAGIC_BYTE_FROM_AUDIO_CONFIG(StreamConfig.audioConfiguration) != 0xCA ||
             CHANNEL_COUNT_FROM_AUDIO_CONFIGURATION(StreamConfig.audioConfiguration) > AUDIO_CONFIGURATION_MAX_CHANNEL_COUNT) {
@@ -328,7 +353,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         Limelog("Disabling reference frame invalidation for 4K streaming with GFE\n");
         VideoCallbacks.capabilities &= ~CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC;
     }
-    
+
     Limelog("Initializing platform...");
     ListenerCallbacks.stageStarting(STAGE_PLATFORM_INIT);
     err = initializePlatform();
@@ -342,9 +367,49 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.stageComplete(STAGE_PLATFORM_INIT);
     Limelog("done\n");
 
-    Limelog("Resolving host name...");
+    // Limelog("Resolving host name...");
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
-    LC_ASSERT(RtspPortNumber != 0);
+
+    // Initialize iroh endpoint
+    // TODO: move earlier
+    // TODO: actually pass in valid dialing information
+    Limelog("Initializing iroh endpoint...");
+    MagicEndpointConfig_t config = magic_endpoint_config_default();
+
+    // TODO: add other alpns
+    // TODO: improve API
+    char videoAlpn[] = "/moonlight/video/1";
+    slice_ref_uint8_t videoAlpnSlice;
+    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
+    videoAlpnSlice.len = strlen(videoAlpn);
+    magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
+    char audioAlpn[] = "/moonlight/audio/1";
+    slice_ref_uint8_t audioAlpnSlice;
+    audioAlpnSlice.ptr = (uint8_t *) &audioAlpn[0];
+    audioAlpnSlice.len = strlen(audioAlpn);
+    magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
+    char rtspAlpn[] = "/moonlight/rtsp/1";
+    slice_ref_uint8_t rtspAlpnSlice;
+    rtspAlpnSlice.ptr = (uint8_t *) &rtspAlpn[0];
+    rtspAlpnSlice.len = strlen(rtspAlpn);
+    magic_endpoint_config_add_alpn(&config, rtspAlpnSlice);
+    char controlAlpn[] = "/moonlight/control/1";
+    slice_ref_uint8_t controlAlpnSlice;
+    controlAlpnSlice.ptr = (uint8_t *) &controlAlpn[0];
+    controlAlpnSlice.len = strlen(controlAlpn);
+    magic_endpoint_config_add_alpn(&config, controlAlpnSlice);
+
+    irohEndpoint = magic_endpoint_default();
+    err = magic_endpoint_bind(&config, 0, &irohEndpoint);
+    irohEndpoint2 = magic_endpoint_default();
+    err = magic_endpoint_bind(&config, 0, &irohEndpoint2);
+    if (err != 0) {
+        Limelog("failed %d\n", err);
+        goto Cleanup;
+    }
+    Limelog("done\n");
+
+    /*LC_ASSERT(RtspPortNumber != 0);
     if (RtspPortNumber != 48010) {
         // If we have an alternate RTSP port, use that as our test port. The host probably
         // isn't listening on 47989 or 47984 anyway, since they're using alternate ports.
@@ -376,11 +441,11 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
         goto Cleanup;
-    }
+    }*/
     stage++;
     LC_ASSERT(stage == STAGE_NAME_RESOLUTION);
     ListenerCallbacks.stageComplete(STAGE_NAME_RESOLUTION);
-    Limelog("done\n");
+    // Limelog("done\n");
 
     // If STREAM_CFG_AUTO was requested, determine the streamingRemotely value
     // now that we have resolved the target address and impose the video packet
@@ -403,9 +468,9 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Initializing audio stream...");
     ListenerCallbacks.stageStarting(STAGE_AUDIO_STREAM_INIT);
-    err = initializeAudioStream();
+    err = initializeAudioStream(irohEndpoint);
     if (err != 0) {
-        Limelog("failed: %d\n", err);
+        Limelog("[iroh Audio] failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_AUDIO_STREAM_INIT, err);
         goto Cleanup;
     }
@@ -416,7 +481,16 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Starting RTSP handshake...");
     ListenerCallbacks.stageStarting(STAGE_RTSP_HANDSHAKE);
-    err = performRtspHandshake(serverInfo);
+
+    // Setup the control iroh connection, used for the RTSP handshake and the control stream
+    irohConnection = connection_default();
+    err = magic_endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    if (err != 0) {
+        Limelog("[iroh control] failed endpoint connect: %d\n", err);
+        goto Cleanup;
+    }
+    Limelog("[iroh] Sendig RTSP handshake\n");
+    err = performRtspHandshake(serverInfo, irohConnection);
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_RTSP_HANDSHAKE, err);
@@ -429,7 +503,11 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Initializing control stream...");
     ListenerCallbacks.stageStarting(STAGE_CONTROL_STREAM_INIT);
-    err = initializeControlStream();
+    // controlConnection = connection_default();
+    // err = magic_endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    //err = magic_endpoint_connect(&irohEndpoint2, controlAlpnSlice, IrohServerNodeAddr, &controlConnection);
+     Limelog("Initializing control stream... 2 ");
+    err = initializeControlStream(serverInfo->irohNodeAddress, irohEndpoint );
     if (err != 0) {
         Limelog("failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_CONTROL_STREAM_INIT, err);
@@ -442,7 +520,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     Limelog("Initializing video stream...");
     ListenerCallbacks.stageStarting(STAGE_VIDEO_STREAM_INIT);
-    initializeVideoStream();
+    initializeVideoStream(irohEndpoint);
     stage++;
     LC_ASSERT(stage == STAGE_VIDEO_STREAM_INIT);
     ListenerCallbacks.stageComplete(STAGE_VIDEO_STREAM_INIT);
@@ -456,7 +534,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.stageComplete(STAGE_INPUT_STREAM_INIT);
     Limelog("done\n");
 
-    Limelog("Starting control stream...");
+    Limelog("NOT Starting control stream...");
     ListenerCallbacks.stageStarting(STAGE_CONTROL_STREAM_START);
     err = startControlStream();
     if (err != 0) {
@@ -466,30 +544,32 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     }
     stage++;
     LC_ASSERT(stage == STAGE_CONTROL_STREAM_START);
-    ListenerCallbacks.stageComplete(STAGE_CONTROL_STREAM_START);
-    Limelog("done\n");
 
+    Limelog("done\n");
+    //stage++;
+    ListenerCallbacks.stageComplete(STAGE_CONTROL_STREAM_START);
     Limelog("Starting video stream...");
     ListenerCallbacks.stageStarting(STAGE_VIDEO_STREAM_START);
-    err = startVideoStream(renderContext, drFlags);
+    err = startVideoStream(renderContext, drFlags, serverInfo->irohNodeAddress);
     if (err != 0) {
         Limelog("Video stream start failed: %d\n", err);
         ListenerCallbacks.stageFailed(STAGE_VIDEO_STREAM_START, err);
         goto Cleanup;
     }
     stage++;
+    Limelog(" STAGE IS %d", stage );
     LC_ASSERT(stage == STAGE_VIDEO_STREAM_START);
     ListenerCallbacks.stageComplete(STAGE_VIDEO_STREAM_START);
     Limelog("done\n");
 
     Limelog("Starting audio stream...");
     ListenerCallbacks.stageStarting(STAGE_AUDIO_STREAM_START);
-    err = startAudioStream(audioContext, arFlags);
-    if (err != 0) {
-        Limelog("Audio stream start failed: %d\n", err);
-        ListenerCallbacks.stageFailed(STAGE_AUDIO_STREAM_START, err);
-        goto Cleanup;
-    }
+    // err = startAudioStream(audioContext, arFlags);
+    // if (err != 0) {
+    //     Limelog("Audio stream start failed: %d\n", err);
+    //     ListenerCallbacks.stageFailed(STAGE_AUDIO_STREAM_START, err);
+    //     goto Cleanup;
+    // }
     stage++;
     LC_ASSERT(stage == STAGE_AUDIO_STREAM_START);
     ListenerCallbacks.stageComplete(STAGE_AUDIO_STREAM_START);
@@ -503,11 +583,11 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
         ListenerCallbacks.stageFailed(STAGE_INPUT_STREAM_START, err);
         goto Cleanup;
     }
-    stage++;
+     stage++;
     LC_ASSERT(stage == STAGE_INPUT_STREAM_START);
     ListenerCallbacks.stageComplete(STAGE_INPUT_STREAM_START);
     Limelog("done\n");
-    
+
     // Wiggle the mouse a bit to wake the display up
     LiSendMouseMoveEvent(1, 1);
     PltSleepMs(10);

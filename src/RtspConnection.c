@@ -1,5 +1,6 @@
 #include "Limelight-internal.h"
 #include "Rtsp.h"
+#include <irohnet.h>
 
 #define RTSP_CONNECT_TIMEOUT_SEC 10
 #define RTSP_RECEIVE_TIMEOUT_SEC 15
@@ -19,7 +20,9 @@ static PPLT_CRYPTO_CONTEXT encryptionCtx;
 static PPLT_CRYPTO_CONTEXT decryptionCtx;
 static uint32_t encryptionSequenceNumber;
 
-static SOCKET sock = INVALID_SOCKET;
+// static SOCKET sock = INVALID_SOCKET;
+static Connection_t* irohConnection = NULL;
+
 static ENetHost* client;
 static ENetPeer* peer;
 
@@ -160,6 +163,7 @@ static bool unsealRtspMessage(char* rawMessage, int rawMessageLen, PRTSP_MESSAGE
     // If the server just closed the connection without responding with anything,
     // there's no point in proceeding any further trying to parse it.
     if (rawMessageLen == 0) {
+        Limelog("Is this size 0?\n");
         return false;
     }
 
@@ -223,6 +227,7 @@ static bool unsealRtspMessage(char* rawMessage, int rawMessageLen, PRTSP_MESSAGE
         }
     }
     else {
+        Limelog("Decrypt not enabled\n");
         decryptedMessage = rawMessage;
         decryptedMessageLen = rawMessageLen;
     }
@@ -267,19 +272,19 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
     payloadLength = request->payloadLength;
     request->payload = NULL;
     request->payloadLength = 0;
-    
+
     // Serialize the RTSP message into a message buffer
     serializedMessage = serializeRtspMessage(request, &messageLen);
     if (serializedMessage == NULL) {
         goto Exit;
     }
-    
+
     // Create the reliable packet that describes our outgoing message
     packet = enet_packet_create(serializedMessage, messageLen, ENET_PACKET_FLAG_RELIABLE);
     if (packet == NULL) {
         goto Exit;
     }
-    
+
     // Send the message
     if (enet_peer_send(peer, 0, packet) < 0) {
         enet_packet_destroy(packet);
@@ -299,10 +304,10 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
             enet_packet_destroy(packet);
             goto Exit;
         }
-        
+
         enet_host_flush(client);
     }
-    
+
     // Wait for a reply
     if (serviceEnetHost(client, &event, RTSP_RECEIVE_TIMEOUT_SEC * 1000) <= 0 ||
         event.type != ENET_EVENT_TYPE_RECEIVE) {
@@ -343,7 +348,7 @@ static bool transactRtspMessageEnet(PRTSP_MESSAGE request, PRTSP_MESSAGE respons
         offset += (int) event.packet->dataLength;
         enet_packet_destroy(event.packet);
     }
-        
+
     if (parseRtspMessage(response, responseBuffer, offset) == RTSP_ERROR_SUCCESS) {
         // Successfully parsed response
         ret = true;
@@ -370,136 +375,85 @@ Exit:
     return ret;
 }
 
-// Send RTSP message and get response over TCP
+// Send RTSP message and get response over iroh
 static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response, int* error) {
     SOCK_RET err;
     bool ret;
-    int offset;
     char* serializedMessage = NULL;
     int messageLen;
-    char* responseBuffer;
-    int responseBufferSize;
-    int connectRetries;
+    slice_ref_uint8_t send_buffer;
+    SendStream_t* sendControlStream = NULL;
+    RecvStream_t* recvControlStream = NULL;
 
+    Vec_uint8_t recvBuffer= rust_buffer_alloc(0); // 0 alloc as unused
     *error = -1;
     ret = false;
-    responseBuffer = NULL;
-    connectRetries = 0;
 
-    // Retry up to 10 seconds if we receive ECONNREFUSED errors from the host PC.
-    // This can happen with GFE 3.22 when initially launching a session because it
-    // returns HTTP 200 OK for the /launch request before the RTSP handshake port
-    // is listening.
-    do {
-        sock = connectTcpSocket(&RemoteAddr, AddrLen, RtspPortNumber, RTSP_CONNECT_TIMEOUT_SEC);
-        if (sock == INVALID_SOCKET) {
-            *error = LastSocketError();
-            if (*error == ECONNREFUSED) {
-                // Try again after 500 ms on ECONNREFUSED
-                PltSleepMs(RTSP_RETRY_DELAY_MS);
-            }
-            else {
-                // Fail if we get some other error
-                break;
-            }
+    if (sendControlStream == NULL || recvControlStream == NULL) {
+        sendControlStream = send_stream_default();
+        recvControlStream = recv_stream_default();
+        int err = connection_open_bi(&irohConnection, &sendControlStream, &recvControlStream);
+        if (err != 0) {
+            Limelog("Failed to establish control stream for RTSP: %d\n", err);
+            goto Exit;
         }
-        else {
-            // We successfully connected
-            break;
-        }
-    } while (connectRetries++ < (RTSP_CONNECT_TIMEOUT_SEC * 1000) / RTSP_RETRY_DELAY_MS && !ConnectionInterrupted);
-    if (sock == INVALID_SOCKET) {
-        return ret;
     }
 
     serializedMessage = sealRtspMessage(request, &messageLen);
     if (serializedMessage == NULL) {
-        closeSocket(sock);
-        sock = INVALID_SOCKET;
         return ret;
     }
 
-    // Send our message split into smaller chunks to avoid MTU issues.
-    // enableNoDelay() must have been called for sendMtuSafe() to work.
-    enableNoDelay(sock);
-    err = sendMtuSafe(sock, serializedMessage, messageLen);
-    if (err == SOCKET_ERROR) {
-        *error = LastSocketError();
-        Limelog("Failed to send RTSP message: %d\n", *error);
+    send_buffer.ptr = (uint8_t *) serializedMessage;
+    send_buffer.len = messageLen;
+    Limelog("RTSP Message to be sent: %s\n", serializedMessage);
+    err = send_stream_write(&sendControlStream, send_buffer);
+    if (err != 0) {
+        Limelog("Failed to send RTSP message: %d\n", err);
         goto Exit;
     }
+    send_stream_finish(sendControlStream);
 
-    // Read the response until the server closes the connection
-    offset = 0;
-    responseBufferSize = 0;
-    for (;;) {
-        struct pollfd pfd;
-
-        if (offset >= responseBufferSize) {
-            responseBufferSize = offset + 16384;
-            responseBuffer = extendBuffer(responseBuffer, responseBufferSize);
-            if (responseBuffer == NULL) {
-                Limelog("Failed to allocate RTSP response buffer\n");
-                goto Exit;
-            }
-        }
-
-        pfd.fd = sock;
-        pfd.events = POLLIN;
-        err = pollSockets(&pfd, 1, RTSP_RECEIVE_TIMEOUT_SEC * 1000);
-        if (err == 0) {
-            *error = ETIMEDOUT;
-            Limelog("RTSP request timed out\n");
-            goto Exit;
-        }
-        else if (err < 0) {
-            *error = LastSocketError();
-            Limelog("Failed to wait for RTSP response: %d\n", *error);
-            goto Exit;
-        }
-
-        err = recv(sock, &responseBuffer[offset], responseBufferSize - offset, 0);
-        if (err < 0) {
-            // Error reading
-            *error = LastSocketError();
-            Limelog("Failed to read RTSP response: %d\n", *error);
-            goto Exit;
-        }
-        else if (err == 0) {
-            // Done reading
-            break;
-        }
-        else {
-            offset += err;
-        }
+    int maxSize = 1024 * 1024;
+    err = recv_stream_read_to_end_timeout(
+                                          &recvControlStream,
+                                          &recvBuffer,
+                                          maxSize,
+                                          RTSP_RECEIVE_TIMEOUT_SEC * 1000);
+    if (err == MAGIC_ENDPOINT_RESULT_TIMEOUT) {
+        *error = ETIMEDOUT;
+        Limelog("RTSP request timed out\n");
+        goto Exit;
     }
+    else if (err != 0) {
+      *error = -1;
+      Limelog("Failed to wait for RTSP response: %d\n", err);
+      goto Exit;
+    }
+
 
     // Decrypt (if necessary) and deserialize the RTSP response
-    ret = unsealRtspMessage(responseBuffer, offset, response);
-
-    // Fetch the local address for this socket if it's not populated yet
-    if (LocalAddr.ss_family == 0) {
-        SOCKADDR_LEN addrLen = (SOCKADDR_LEN)sizeof(LocalAddr);
-        if (getsockname(sock, (struct sockaddr*)&LocalAddr, &addrLen) < 0) {
-            Limelog("Failed to get local address: %d\n", LastSocketError());
-            memset(&LocalAddr, 0, sizeof(LocalAddr));
-        }
-        else {
-            LC_ASSERT(addrLen == AddrLen);
-        }
-    }
+    int responseLen = rust_buffer_len(&recvBuffer);
+    ret = unsealRtspMessage((char*)recvBuffer.ptr, responseLen, response);
+    Limelog(" Unseal RTSP Response %d\n", ret );
 
 Exit:
     if (serializedMessage != NULL) {
         free(serializedMessage);
     }
 
-    if (responseBuffer != NULL) {
-        free(responseBuffer);
+    rust_buffer_free(recvBuffer);
+
+    // We are done sending, so close the stream.
+    if (sendControlStream != NULL) {
+       // send_stream_finish(sendControlStream);
+        sendControlStream = NULL;
+    }
+    if (recvControlStream != NULL) {
+        recv_stream_free(recvControlStream);
+        recvControlStream = NULL;
     }
 
-    closeSocket(sock);
-    sock = INVALID_SOCKET;
     return ret;
 }
 
@@ -583,7 +537,7 @@ static bool setupStream(PRTSP_MESSAGE response, char* target, int* error) {
         else {
             transportValue = " ";
         }
-        
+
         if (addOption(&request, "Transport", transportValue) &&
             addOption(&request, "If-Modified-Since",
                 "Thu, 01 Jan 1970 00:00:00 GMT")) {
@@ -920,13 +874,17 @@ bool parseSdpAttributeToInt(const char* payload, const char* name, int* val) {
 }
 
 // Perform RTSP Handshake with the streaming server machine as part of the connection process
-int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
+int performRtspHandshake
+(PSERVER_INFORMATION serverInfo, Connection_t* conn) {
     int ret;
 
-    LC_ASSERT(RtspPortNumber != 0);
+    // LC_ASSERT(RtspPortNumber != 0);
+    irohConnection = conn;
 
     // Initialize global state
-    useEnet = (AppVersionQuad[0] >= 5) && (AppVersionQuad[0] <= 7) && (AppVersionQuad[2] < 404);
+    // useEnet = (AppVersionQuad[0] >= 5) && (AppVersionQuad[0] <= 7) && (AppVersionQuad[2] < 404);
+    // TODO: would be cleaner to rip out enet entirely out of this version of the code
+    useEnet = false; // disable Enet usage
     currentSeqNumber = 1;
     hasSessionId = false;
     controlStreamId = APP_VERSION_AT_LEAST(7, 1, 431) ? "streamid=control/13/0" : "streamid=control/1/0";
@@ -957,6 +915,8 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             // NB: If the remote address is not a LAN address, the host will likely not enable high quality
             // audio since it only does that for local streaming normally. We can avoid this limitation,
             // but only if the caller gave us the RTSP session URL that it received from the host during launch.
+
+            // TODO: ensure sunshine sends us high quality data and ignores the rtsp url
             addrToUrlSafeString(&RemoteAddr, urlAddr, sizeof(urlAddr));
             snprintf(rtspTargetUrl, sizeof(rtspTargetUrl), "rtsp%s://%s:%u", useEnet ? "ru" : "", urlAddr, RtspPortNumber);
         }
@@ -985,21 +945,21 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             rtspClientVersion = 14;
             break;
     }
-    
+
     // Setup ENet if required by this GFE version
     if (useEnet) {
         ENetAddress address;
         ENetEvent event;
-        
+
         enet_address_set_address(&address, (struct sockaddr *)&RemoteAddr, AddrLen);
         enet_address_set_port(&address, RtspPortNumber);
-        
+
         // Create a client that can use 1 outgoing connection and 1 channel
         client = enet_host_create(RemoteAddr.ss_family, NULL, 1, 1, 0, 0);
         if (client == NULL) {
             return -1;
         }
-    
+
         // Connect to the host
         peer = enet_host_connect(client, &address, 1, 0);
         if (peer == NULL) {
@@ -1007,7 +967,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             client = NULL;
             return -1;
         }
-    
+
         // Wait for the connect to complete
         if (serviceEnetHost(client, &event, RTSP_CONNECT_TIMEOUT_SEC * 1000) <= 0 ||
             event.type != ENET_EVENT_TYPE_CONNECT) {
@@ -1059,7 +1019,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
             ret = response.message.response.statusCode;
             goto Exit;
         }
-        
+
         if ((StreamConfig.supportedVideoFormats & VIDEO_FORMAT_MASK_AV1) && strstr(response.payload, "AV1/90000")) {
             if ((serverInfo->serverCodecModeSupport & SCM_AV1_MAIN10) && (StreamConfig.supportedVideoFormats & VIDEO_FORMAT_AV1_MAIN10)) {
                 NegotiatedVideoFormat = VIDEO_FORMAT_AV1_MAIN10;
@@ -1155,19 +1115,23 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         // Parse the Sunshine ping payload protocol extension if present
+        Limelog("Before memset\n");
         memset(&AudioPingPayload, 0, sizeof(AudioPingPayload));
         pingPayload = getOptionContent(response.options, "X-SS-Ping-Payload");
-        if (pingPayload != NULL && strlen(pingPayload) == sizeof(AudioPingPayload.payload)) {
+
+        if (pingPayload != NULL && strlen(pingPayload)!=0 && strlen(pingPayload) == sizeof(AudioPingPayload.payload)) {
             memcpy(AudioPingPayload.payload, pingPayload, sizeof(AudioPingPayload.payload));
         }
+
 
         // Let the audio stream know the port number is now finalized.
         // NB: This is needed because audio stream init happens before RTSP,
         // which is not the case for the video stream.
         notifyAudioPortNegotiationComplete();
+        Limelog("After notify audio port negotiation\n");
 
         sessionId = getOptionContent(response.options, "Session");
-
+        Limelog("After session id extraction \n");
         if (sessionId == NULL) {
             Limelog("RTSP SETUP streamid=audio is missing session attribute\n");
             ret = -1;
@@ -1175,10 +1139,11 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         // Given there is a non-null session id, get the
-        // first token of the session until ";", which 
+        // first token of the session until ";", which
         // resolves any 454 session not found errors on
         // standard RTSP server implementations.
-        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90") 
+        // (i.e - sessionId = "DEADBEEFCAFE;timeout = 90")
+         Limelog("Before session id message");
         sessionIdString = strdup(strtok_r(sessionId, ";", &strtokCtx));
         if (sessionIdString == NULL) {
             Limelog("Failed to duplicate session ID string\n");
@@ -1187,8 +1152,9 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
 
         hasSessionId = true;
-
+        Limelog("Before free message");
         freeMessage(&response);
+        Limelog("After free message");
     }
 
     {
@@ -1232,7 +1198,7 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
 
         freeMessage(&response);
     }
-    
+
     if (AppVersionQuad[0] >= 5) {
         RTSP_MESSAGE response;
         int error = -1;
@@ -1359,9 +1325,9 @@ int performRtspHandshake(PSERVER_INFORMATION serverInfo) {
         }
     }
 
-    
+
     ret = 0;
-    
+
 Exit:
     // Cleanup the ENet stuff
     if (useEnet) {
@@ -1369,7 +1335,7 @@ Exit:
             enet_peer_disconnect_now(peer, 0);
             peer = NULL;
         }
-        
+
         if (client != NULL) {
             enet_host_destroy(client);
             client = NULL;

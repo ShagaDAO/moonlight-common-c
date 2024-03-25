@@ -541,11 +541,14 @@ uint32_t RtpvGetCurrentFrameNumber(PRTP_VIDEO_QUEUE queue) {
 
 int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_QUEUE_ENTRY packetEntry) {
     if (isBefore16(packet->sequenceNumber, queue->nextContiguousSequenceNumber)) {
+        Limelog("Behind current seq number");
         // Reject packets behind our current buffer window
         return RTPF_RET_REJECTED;
     }
 
     // FLAG_EXTENSION is required for all supported versions of GFE.
+  //  Limelog("packet->header %x %x", packet->header, FLAG_EXTENSION);
+    //if(!(packet->header & FLAG_EXTENSION)) return 0;
     LC_ASSERT_VT(packet->header & FLAG_EXTENSION);
 
     int dataOffset = sizeof(*packet);
@@ -555,6 +558,8 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
     if (length < dataOffset + (int)sizeof(NV_VIDEO_PACKET)) {
         // Reject packets that are too small to fit a NV_VIDEO_PACKET header
+        Limelog("Behind length size %d %d %d", length, dataOffset, (int)sizeof(NV_VIDEO_PACKET));
+        // Reject packets behind our current buffer
         return RTPF_RET_REJECTED;
     }
 
@@ -575,6 +580,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 #ifndef LC_FUZZING
     if (isBefore16(nvPacket->frameIndex, queue->currentFrameNumber)) {
         // Reject frames behind our current frame number
+        //Limelog("Behind current frame number");
         return RTPF_RET_REJECTED;
     }
 #endif
@@ -584,9 +590,9 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
 
     if (nvPacket->frameIndex == queue->currentFrameNumber && fecCurrentBlockNumber < queue->multiFecCurrentBlockNumber) {
         // Reject FEC blocks behind our current block number
+        Limelog("Behind current block number");
         return RTPF_RET_REJECTED;
     }
-
     // Reinitialize the queue if it's empty after a frame delivery or
     // if we can't finish a frame before receiving the next one.
     if (queue->pendingFecBlockList.count == 0 || queue->currentFrameNumber != nvPacket->frameIndex ||
@@ -672,7 +678,7 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
         // The check here looks weird, but that's because we increment the frame number
         // after successfully processing a frame.
         if (queue->currentFrameNumber != nvPacket->frameIndex) {
-            LC_ASSERT_VT(queue->currentFrameNumber < nvPacket->frameIndex);
+           // LC_ASSERT_VT(queue->currentFrameNumber < nvPacket->frameIndex);
 
             // If the frame immediately preceding this one was lost, we may have already
             // reported it using our speculative RFI logic. Don't report it again.

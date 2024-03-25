@@ -1,6 +1,8 @@
 #include "Limelight-internal.h"
 
-static SOCKET rtpSocket = INVALID_SOCKET;
+// static SOCKET rtpSocket = INVALID_SOCKET;
+static MagicEndpoint_t* irohEndpoint = NULL;
+static Connection_t* irohAudioConnection = NULL;
 
 static LINKED_BLOCKING_QUEUE packetQueue;
 static RTP_AUDIO_QUEUE rtpAudioQueue;
@@ -24,6 +26,7 @@ static uint8_t opusHeaderByte;
 #endif
 
 #define MAX_PACKET_SIZE 1400
+static size_t maxPacketSize = MAX_PACKET_SIZE;
 
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
     LINKED_BLOCKING_QUEUE_ENTRY lentry;
@@ -49,15 +52,30 @@ static void AudioPingThreadProc(void* context) {
     // issues related to receiving ICMP port unreachable messages due
     // to sending a packet prior to the host PC binding to that port.
     int pingCount = 0;
+
+    // buffer for iroh sends
+    slice_ref_uint8_t buffer;
+    if (maxPacketSize < sizeof(AudioPingPayload)) {
+        Limelog("Cannot send audio pings, max datagram size too small");
+        return;
+    }
+
     while (!PltIsThreadInterrupted(&udpPingThread)) {
         if (AudioPingPayload.payload[0] != 0) {
             pingCount++;
             AudioPingPayload.sequenceNumber = BE32(pingCount);
 
-            sendto(rtpSocket, (char*)&AudioPingPayload, sizeof(AudioPingPayload), 0, (struct sockaddr*)&saddr, AddrLen);
+            // sendto(rtpSocket, (char*)&AudioPingPayload, sizeof(AudioPingPayload), 0, (struct sockaddr*)&saddr, AddrLen);
+            buffer.ptr = (uint8_t*) &AudioPingPayload;
+            buffer.len = sizeof(AudioPingPayload);
+            connection_write_datagram(&irohAudioConnection, buffer);
         }
         else {
-            sendto(rtpSocket, legacyPingData, sizeof(legacyPingData), 0, (struct sockaddr*)&saddr, AddrLen);
+          // sendto(rtpSocket, legacyPingData, sizeof(legacyPingData), 0, (struct sockaddr*)&saddr, AddrLen);
+            // send via iroh
+            buffer.ptr = (uint8_t*) &legacyPingData;
+            buffer.len = sizeof(legacyPingData);
+            connection_write_datagram(&irohAudioConnection, buffer);
         }
 
         PltSleepMsInterruptible(&udpPingThread, 500);
@@ -65,7 +83,7 @@ static void AudioPingThreadProc(void* context) {
 }
 
 // Initialize the audio stream and start
-int initializeAudioStream(void) {
+int initializeAudioStream(MagicEndpoint_t* ep) {
     LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
     RtpaInitializeQueue(&rtpAudioQueue);
     lastSeq = 0;
@@ -81,6 +99,8 @@ int initializeAudioStream(void) {
     memcpy(&avRiKeyId, StreamConfig.remoteInputAesIv, sizeof(avRiKeyId));
     avRiKeyId = BE32(avRiKeyId);
 
+    irohEndpoint = ep;
+
     return 0;
 }
 
@@ -90,22 +110,65 @@ int initializeAudioStream(void) {
 int notifyAudioPortNegotiationComplete(void) {
     LC_ASSERT(!pingThreadStarted);
     LC_ASSERT(AudioPortNumber != 0);
+    Limelog("Notify 1");
 
     // For GFE 3.22 compatibility, we must start the audio ping thread before the RTSP handshake.
     // It will not reply to our RTSP PLAY request until the audio ping has been received.
-    rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
+    /*rtpSocket = bindUdpSocket(RemoteAddr.ss_family, &LocalAddr, AddrLen, 0, SOCK_QOS_TYPE_AUDIO);
     if (rtpSocket == INVALID_SOCKET) {
         return LastSocketFail();
+    }*/
+
+    // TODO: improve API
+    char audioAlpn[] = "/moonlight/audio/1";
+    slice_ref_uint8_t audioAlpnSlice;
+    audioAlpnSlice.ptr = (uint8_t *) &audioAlpn[0];
+    audioAlpnSlice.len = strlen(audioAlpn);
+    Limelog("Notify 2");
+
+    MagicEndpoint_t *ep = magic_endpoint_default();
+    MagicEndpointConfig_t config = magic_endpoint_config_default();
+    magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
+    int bind_res = magic_endpoint_bind(&config, 0, &ep);
+
+    if (bind_res != 0)
+    {
+        Limelog(stderr, "failed to bind\n");
+        return -1;
     }
+
+    // connect
+    irohAudioConnection = connection_default();
+    IrohServerNodeAddr = node_addr_default();
+    char *nodeAddrToUse = irohNodeAddressTest;
+    int err = node_addr_from_string(nodeAddrToUse, &IrohServerNodeAddr);
+    if (err != 0)
+    {
+        Limelog(stderr, "failed to assign node addr\n");
+        return -1;
+    }
+    Limelog("Notify 2.3");
+    err = magic_endpoint_connect(&ep, audioAlpnSlice, IrohServerNodeAddr, &irohAudioConnection);
+
+    Limelog("Notify 3");
+    if (err != 0) {
+        return err;
+    }
+    Limelog("Notify 3");
+    maxPacketSize = connection_max_datagram_size(&irohAudioConnection);
+    if (maxPacketSize > MAX_PACKET_SIZE) {
+        maxPacketSize = MAX_PACKET_SIZE;
+    }
+    Limelog("Notify 4");
 
     // We may receive audio before our threads are started, but that's okay. We'll
     // drop the first 1 second of audio packets to catch up with the backlog.
-    int err = PltCreateThread("AudioPing", AudioPingThreadProc, NULL, &udpPingThread);
+    //err = PltCreateThread("AudioPing", AudioPingThreadProc, NULL, &udpPingThread);
     if (err != 0) {
         return err;
     }
 
-    pingThreadStarted = true;
+    //pingThreadStarted = true;
     return 0;
 }
 
@@ -124,15 +187,18 @@ static void freePacketList(PLINKED_BLOCKING_QUEUE_ENTRY entry) {
 
 // Tear down the audio stream once we're done with it
 void destroyAudioStream(void) {
-    if (rtpSocket != INVALID_SOCKET) {
+    // if (rtpSocket != INVALID_SOCKET) {
+    if (irohAudioConnection != NULL) {
         if (pingThreadStarted) {
             PltInterruptThread(&udpPingThread);
             PltJoinThread(&udpPingThread);
             PltCloseThread(&udpPingThread);
         }
 
-        closeSocket(rtpSocket);
-        rtpSocket = INVALID_SOCKET;
+        // closeSocket(rtpSocket);
+        // rtpSocket = INVALID_SOCKET;
+        connection_free(irohAudioConnection);
+        irohAudioConnection = NULL;
     }
 
     PltDestroyCryptoContext(audioDecryptionCtx);
@@ -182,7 +248,7 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
         unsigned char iv[16] = { 0 };
         int dataLength = packet->header.size - sizeof(*rtp);
 
-        LC_ASSERT(dataLength <= MAX_PACKET_SIZE);
+        LC_ASSERT(dataLength <= maxPacketSize);
 
         // The IV is the avkeyid (equivalent to the rikeyid) +
         // the RTP sequence number, in big endian.
@@ -240,23 +306,25 @@ static void AudioReceiveThreadProc(void* context) {
     PRTP_PACKET rtp;
     PQUEUED_AUDIO_PACKET packet;
     int queueStatus;
-    bool useSelect;
+    // bool useSelect;
     uint32_t packetsToDrop;
     int waitingForAudioMs;
 
     packet = NULL;
     packetsToDrop = 500 / AudioPacketDuration;
 
-    if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
+    /*if (setNonFatalRecvTimeoutMs(rtpSocket, UDP_RECV_POLL_TIMEOUT_MS) < 0) {
         // SO_RCVTIMEO failed, so use select() to wait
         useSelect = true;
     }
     else {
         // SO_RCVTIMEO timeout set for recv()
         useSelect = false;
-    }
+    }*/
 
     waitingForAudioMs = 0;
+    Vec_uint8_t recvBuffer = rust_buffer_alloc(maxPacketSize);
+
     while (!PltIsThreadInterrupted(&receiveThread)) {
         if (packet == NULL) {
             packet = (PQUEUED_AUDIO_PACKET)malloc(sizeof(*packet));
@@ -267,15 +335,16 @@ static void AudioReceiveThreadProc(void* context) {
             }
         }
 
-        packet->header.size = recvUdpSocket(rtpSocket, &packet->data[0], MAX_PACKET_SIZE, useSelect);
+        packet->header.size = connection_read_datagram_timeout(&irohAudioConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
+        // packet->header.size = recvUdpSocket(rtpSocket, &packet->data[0], MAX_PACKET_SIZE, useSelect);
         if (packet->header.size < 0) {
-            Limelog("Audio Receive: recvUdpSocket() failed: %d\n", (int)LastSocketError());
+            Limelog("Audio Receive: read_datagram() failed\n");
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             break;
         }
         else if (packet->header.size == 0) {
             // Receive timed out; try again
-            
+
             if (!receivedDataFromPeer) {
                 waitingForAudioMs += UDP_RECV_POLL_TIMEOUT_MS;
             }
@@ -291,6 +360,9 @@ static void AudioReceiveThreadProc(void* context) {
             // Runt packet
             continue;
         }
+
+        // TODO: avoid copy
+        memcpy(packet->data, recvBuffer.ptr, rust_buffer_len(&recvBuffer));
 
         rtp = (PRTP_PACKET)&packet->data[0];
 
@@ -366,7 +438,7 @@ static void AudioReceiveThreadProc(void* context) {
                         free(queuedPacket);
                     }
                 }
-                
+
                 // Break on exit
                 if (queuedPacket != NULL) {
                     break;
@@ -374,7 +446,7 @@ static void AudioReceiveThreadProc(void* context) {
             }
         }
     }
-    
+
     if (packet != NULL) {
         free(packet);
     }
@@ -405,12 +477,12 @@ void stopAudioStream(void) {
     AudioCallbacks.stop();
 
     PltInterruptThread(&receiveThread);
-    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {        
+    if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
         // Signal threads waiting on the LBQ
         LbqSignalQueueShutdown(&packetQueue);
         PltInterruptThread(&decoderThread);
     }
-    
+
     PltJoinThread(&receiveThread);
     if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
         PltJoinThread(&decoderThread);
@@ -452,7 +524,7 @@ int startAudioStream(void* audioContext, int arFlags) {
     err = PltCreateThread("AudioRecv", AudioReceiveThreadProc, NULL, &receiveThread);
     if (err != 0) {
         AudioCallbacks.stop();
-        closeSocket(rtpSocket);
+        // closeSocket(rtpSocket);
         AudioCallbacks.cleanup();
         return err;
     }
@@ -464,7 +536,7 @@ int startAudioStream(void* audioContext, int arFlags) {
             PltInterruptThread(&receiveThread);
             PltJoinThread(&receiveThread);
             PltCloseThread(&receiveThread);
-            closeSocket(rtpSocket);
+            // closeSocket(rtpSocket);
             AudioCallbacks.cleanup();
             return err;
         }

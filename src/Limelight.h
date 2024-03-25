@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <stdbool.h>
+#define TEST_NODE_ADDR "nodeaayrc3uzcrbcbohawl2euicv3kkebpbigkypuyfvw722npbr2itzsajcnb2hi4dthixs65ltmuys2mjomrsxe4bonfzg62bonzsxi53pojvs4lycaaflmaaky6aagabcpx5o7r4aam"
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,8 @@ extern "C" {
 #define ENCFLG_AUDIO 0x00000001
 #define ENCFLG_VIDEO 0x00000002
 #define ENCFLG_ALL   0xFFFFFFFF
+
+extern char *irohNodeAddressTest;
 
 // This function returns a string that you SHOULD append to the /launch and /resume
 // query parameter string. This is used to enable certain extended functionality
@@ -512,7 +515,11 @@ typedef struct _SERVER_INFORMATION {
 
     // Specifies the 'ServerCodecModeSupport' from the /serverinfo response.
     int serverCodecModeSupport;
+
+    const char *irohNodeAddress;
 } SERVER_INFORMATION, *PSERVER_INFORMATION;
+
+
 
 // Use this function to zero the server information when allocated on the stack or heap
 void LiInitializeServerInformation(PSERVER_INFORMATION serverInfo);
