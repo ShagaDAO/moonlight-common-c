@@ -699,7 +699,7 @@ static bool sendMessageIroh(short ptype, short paylen, const void* payload) {
 
     // -- Lock Start
     PltLockMutex(&enetMutex);
-    Limelog(" Packet length %d %d", sizeof(*packet), paylen);
+    //Limelog(" Packet length %d %d", sizeof(*packet), paylen);
     // Queue the packet to be sent
     err = connection_write_datagram(&irohConnection, buffer);
 
@@ -870,7 +870,7 @@ static bool sendMessageIroh(short ptype, short paylen, const void* payload) {
 
 static bool sendMessageAndForget(short ptype, short paylen, const void* payload) {
     bool ret;
-    Limelog("Sending message on iroh control channel %d %d %s ", ptype , paylen, payload);
+    //Limelog("Sending message on iroh control channel %d %d %s ", ptype , paylen, payload);
     ret = sendMessageIroh(ptype, paylen, payload);
 
     // Unlike regular sockets, ENet sockets aren't safe to invoke from multiple

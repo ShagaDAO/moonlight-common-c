@@ -37,6 +37,7 @@ extern "C" {
 #define ENCFLG_ALL   0xFFFFFFFF
 
 extern char *irohNodeAddressTest;
+extern int iroh_rtt;
 
 // This function returns a string that you SHOULD append to the /launch and /resume
 // query parameter string. This is used to enable certain extended functionality

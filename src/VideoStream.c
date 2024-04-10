@@ -9,6 +9,7 @@ char filename[50]; // Buffer to hold the filename
 
 #define FIRST_FRAME_PORT 47996
 
+int iroh_rtt= 0;
 static RTP_VIDEO_QUEUE rtpQueue;
 
 // static SOCKET rtpSocket = INVALID_SOCKET;
@@ -178,8 +179,8 @@ static void VideoReceiveThreadProc(void* context) {
                             useSelect);*/
         // TODO: read with timeout
         err = connection_read_datagram_timeout(&irohConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
-
-
+       Limelog("RTT is %d", connection_rtt(&irohConnection));
+        iroh_rtt = connection_rtt(&irohConnection);
         // err = recv_stream_read(&recvStream, recvBufferSlice);
 
         if (err < 0) {
@@ -253,26 +254,26 @@ static void VideoReceiveThreadProc(void* context) {
             continue;
         }
 
-        if(counter < 100) {
-            sprintf(filename, "moonlight-iroh2-%d.bin", counter++);
+        // if(counter < 100) {
+        //     sprintf(filename, "moonlight-iroh2-%d.bin", counter++);
 
-            // Open the file in binary write mode
-            FILE *file = fopen(filename, "wb");
-            if (file == NULL) {
+        //     // Open the file in binary write mode
+        //     FILE *file = fopen(filename, "wb");
+        //     if (file == NULL) {
 
-            }
+        //     }
 
 
-            // Write the data to the file
-            size_t written = fwrite(buffer, sizeof(unsigned char), receiveSize, file);
-            if (written < receiveSize) {
-                perror("Error writing to file");
-                fclose(file); // Close the file before returning
-            }
+        //     // Write the data to the file
+        //     size_t written = fwrite(buffer, sizeof(unsigned char), receiveSize, file);
+        //     if (written < receiveSize) {
+        //         perror("Error writing to file");
+        //         fclose(file); // Close the file before returning
+        //     }
 
-            // Close the file
-            fclose(file);
-        }
+        //     // Close the file
+        //     fclose(file);
+        // }
         // Decrypt the packet into the buffer if encryption is enabled
         if (encrypted) {
             PENC_VIDEO_HEADER encHeader = (PENC_VIDEO_HEADER)encryptedBuffer;

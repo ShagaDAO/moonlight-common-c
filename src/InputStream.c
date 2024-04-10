@@ -238,7 +238,7 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
     // On GFE 3.22, the entire control stream is encrypted (and support for separate RI encrypted)
     // has been removed. We send the plaintext packet through and the control stream code will do
     // the encryption.
-    Limelog("Sending input packet ....");
+    //Limelog("Sending input packet ....");
     if (encryptedControlStream) {
         err = (SOCK_RET)sendInputPacketOnControlStream((unsigned char*)&holder->packet,
                                                         PACKET_SIZE(holder));
