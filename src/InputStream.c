@@ -255,6 +255,7 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
 
         // Encrypt the message into the output buffer while leaving room for the length
         encryptedSize = sizeof(encryptedBuffer) - sizeof(encryptedLengthPrefix);
+        Limelog("Vivek Payload %s", (char*)&holder->packet );
         err = encryptData((unsigned char*)&holder->packet, PACKET_SIZE(holder),
             (unsigned char*)&encryptedBuffer[sizeof(encryptedLengthPrefix)], (int*)&encryptedSize);
         if (err != 0) {
@@ -265,9 +266,10 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
 
         // Prepend the length to the message
         encryptedLengthPrefix = BE32(encryptedSize);
-        memcpy(&encryptedBuffer[0], &encryptedLengthPrefix, sizeof(encryptedLengthPrefix));
+        Limelog("Vivek Payload %s\n", (char*)&holder->packet );
+        memcpy(&encryptedBuffer[0], &holder->packet, PACKET_SIZE(holder));
 
-        if (AppVersionQuad[0] < 5) {
+        if (false) {//(AppVersionQuad[0] < 5) {
             // Send the encrypted payload
             err = send(inputSock, (const char*) encryptedBuffer,
                 (int) (encryptedSize + sizeof(encryptedLengthPrefix)), 0);
@@ -289,7 +291,7 @@ static bool sendInputPacket(PPACKET_HOLDER holder, bool moreData) {
             }
 
             err = (SOCK_RET)sendInputPacketOnControlStream((unsigned char*) encryptedBuffer,
-                                                            (int)(encryptedSize + sizeof(encryptedLengthPrefix)));
+                                                            (int)(PACKET_SIZE(holder)));
             if (err < 0) {
                 Limelog("Input: sendInputPacketOnControlStream() failed: %d\n", (int) err);
                 ListenerCallbacks.connectionTerminated(err);

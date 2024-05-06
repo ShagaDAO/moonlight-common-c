@@ -461,7 +461,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
                 // Cap packet size at 1024 for remote streaming to avoid
                 // MTU problems and fragmentation.
                 Limelog("Packet size capped at 1KB for remote streaming\n");
-                StreamConfig.packetSize = 1024;
+                StreamConfig.packetSize = 1000;
             }
         }
     }

@@ -322,7 +322,7 @@ static void VideoReceiveThreadProc(void* context) {
        //Limelog(" Sequence number %d ",  packet->sequenceNumber);
 
        // Limelog(" Adding to queue of RTP ");
-        queueStatus = RtpvAddPacket(&rtpQueue, packet, 1008, (PRTPV_QUEUE_ENTRY)&buffer[decryptedSize]);
+        queueStatus = RtpvAddPacket(&rtpQueue, packet, 1016, (PRTPV_QUEUE_ENTRY)&buffer[decryptedSize]);
         //Limelog(" Queuestatus : %d ", queueStatus);
         if (queueStatus == RTPF_RET_QUEUED) {
             // The queue owns the buffer
