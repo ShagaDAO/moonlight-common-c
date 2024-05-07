@@ -25,7 +25,7 @@ static uint64_t firstReceiveTime;
 static uint8_t opusHeaderByte;
 #endif
 
-#define MAX_PACKET_SIZE 1400
+#define MAX_PACKET_SIZE 1000
 static size_t maxPacketSize = MAX_PACKET_SIZE;
 
 typedef struct _QUEUE_AUDIO_PACKET_HEADER {
@@ -163,12 +163,12 @@ int notifyAudioPortNegotiationComplete(void) {
 
     // We may receive audio before our threads are started, but that's okay. We'll
     // drop the first 1 second of audio packets to catch up with the backlog.
-    //err = PltCreateThread("AudioPing", AudioPingThreadProc, NULL, &udpPingThread);
+    err = PltCreateThread("AudioPing", AudioPingThreadProc, NULL, &udpPingThread);
     if (err != 0) {
         return err;
     }
 
-    //pingThreadStarted = true;
+    pingThreadStarted = true;
     return 0;
 }
 
@@ -242,7 +242,7 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
 
     lastSeq = rtp->sequenceNumber;
 
-    if (AudioEncryptionEnabled) {
+    if (false) {
         // We must have room for the AES padding which may be written to the buffer
         unsigned char decryptedOpusData[ROUND_TO_PKCS7_PADDED_LEN(MAX_PACKET_SIZE)];
         unsigned char iv[16] = { 0 };
@@ -286,16 +286,16 @@ static void decodeInputData(PQUEUED_AUDIO_PACKET packet) {
     }
     else {
 #ifdef LC_DEBUG
-        if (opusHeaderByte == INVALID_OPUS_HEADER) {
-            opusHeaderByte = ((uint8_t*)(rtp + 1))[0];
-            LC_ASSERT_VT(opusHeaderByte != INVALID_OPUS_HEADER);
-        }
-        else {
-            // Opus header should stay constant for the entire stream.
-            // If it doesn't, it may indicate that the RtpAudioQueue
-            // incorrectly recovered a data shard.
-            LC_ASSERT_VT(((uint8_t*)(rtp + 1))[0] == opusHeaderByte);
-        }
+//        if (opusHeaderByte == INVALID_OPUS_HEADER) {
+//            opusHeaderByte = ((uint8_t*)(rtp + 1))[0];
+//            LC_ASSERT_VT(opusHeaderByte != INVALID_OPUS_HEADER);
+//        }
+//        else {
+//            // Opus header should stay constant for the entire stream.
+//            // If it doesn't, it may indicate that the RtpAudioQueue
+//            // incorrectly recovered a data shard.
+//            LC_ASSERT_VT(((uint8_t*)(rtp + 1))[0] == opusHeaderByte);
+//        }
 #endif
 
         AudioCallbacks.decodeAndPlaySample((char*)(rtp + 1), packet->header.size - sizeof(*rtp));
@@ -335,7 +335,8 @@ static void AudioReceiveThreadProc(void* context) {
             }
         }
 
-        packet->header.size = connection_read_datagram_timeout(&irohAudioConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
+        connection_read_datagram_timeout(&irohAudioConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
+        packet->header.size = rust_buffer_len(&recvBuffer);
         // packet->header.size = recvUdpSocket(rtpSocket, &packet->data[0], MAX_PACKET_SIZE, useSelect);
         if (packet->header.size < 0) {
             Limelog("Audio Receive: read_datagram() failed\n");
@@ -391,7 +392,6 @@ static void AudioReceiveThreadProc(void* context) {
         rtp->sequenceNumber = BE16(rtp->sequenceNumber);
         rtp->timestamp = BE32(rtp->timestamp);
         rtp->ssrc = BE32(rtp->ssrc);
-
         queueStatus = RtpaAddPacket(&rtpAudioQueue, (PRTP_PACKET)&packet->data[0], (uint16_t)packet->header.size);
         if (RTPQ_HANDLE_NOW(queueStatus)) {
             if ((AudioCallbacks.capabilities & CAPABILITY_DIRECT_SUBMIT) == 0) {
