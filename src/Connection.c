@@ -318,7 +318,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     // FEC only works in 16 byte chunks, so we must round down
     // the given packet size to the nearest multiple of 16.
     StreamConfig.packetSize -= StreamConfig.packetSize % 16;
-
+    Limelog("Vivek stream config size , %d", StreamConfig.packetSize);
     if (StreamConfig.packetSize == 0) {
         Limelog("Invalid packet size specified\n");
         err = -1;
@@ -370,13 +370,8 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     // Limelog("Resolving host name...");
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
 
-    // Initialize iroh endpoint
-    // TODO: move earlier
-    // TODO: actually pass in valid dialing information
     Limelog("Initializing iroh endpoint...");
     MagicEndpointConfig_t config = magic_endpoint_config_default();
-
-    // TODO: add other alpns
     // TODO: improve API
     char videoAlpn[] = "/moonlight/video/1";
     slice_ref_uint8_t videoAlpnSlice;
@@ -401,71 +396,18 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     irohEndpoint = magic_endpoint_default();
     err = magic_endpoint_bind(&config, 0, &irohEndpoint);
-    irohEndpoint2 = magic_endpoint_default();
-    err = magic_endpoint_bind(&config, 0, &irohEndpoint2);
+
     if (err != 0) {
         Limelog("failed %d\n", err);
         goto Cleanup;
     }
     Limelog("done\n");
 
-    /*LC_ASSERT(RtspPortNumber != 0);
-    if (RtspPortNumber != 48010) {
-        // If we have an alternate RTSP port, use that as our test port. The host probably
-        // isn't listening on 47989 or 47984 anyway, since they're using alternate ports.
-        err = resolveHostName(serverInfo->address, AF_UNSPEC, RtspPortNumber, &RemoteAddr, &AddrLen);
-        if (err != 0) {
-            // Sleep for a second and try again. It's possible that we've attempt to connect
-            // before the host has gotten around to listening on the RTSP port. Give it some
-            // time before retrying.
-            PltSleepMs(1000);
-            err = resolveHostName(serverInfo->address, AF_UNSPEC, RtspPortNumber, &RemoteAddr, &AddrLen);
-        }
-    }
-    else {
-        // We use TCP 47984 and 47989 first here because we know those should always be listening
-        // on hosts using the standard ports.
-        //
-        // TCP 48010 is a last resort because:
-        // a) it's not always listening and there's a race between listen() on the host and our connect()
-        // b) it's not used at all by certain host versions which perform RTSP over ENet
-        err = resolveHostName(serverInfo->address, AF_UNSPEC, 47984, &RemoteAddr, &AddrLen);
-        if (err != 0) {
-            err = resolveHostName(serverInfo->address, AF_UNSPEC, 47989, &RemoteAddr, &AddrLen);
-        }
-        if (err != 0) {
-            err = resolveHostName(serverInfo->address, AF_UNSPEC, 48010, &RemoteAddr, &AddrLen);
-        }
-    }
-    if (err != 0) {
-        Limelog("failed: %d\n", err);
-        ListenerCallbacks.stageFailed(STAGE_NAME_RESOLUTION, err);
-        goto Cleanup;
-    }*/
     stage++;
     LC_ASSERT(stage == STAGE_NAME_RESOLUTION);
     ListenerCallbacks.stageComplete(STAGE_NAME_RESOLUTION);
-    // Limelog("done\n");
-
-    // If STREAM_CFG_AUTO was requested, determine the streamingRemotely value
-    // now that we have resolved the target address and impose the video packet
-    // size cap if required.
-    if (StreamConfig.streamingRemotely == STREAM_CFG_AUTO) {
-        if (isPrivateNetworkAddress(&RemoteAddr)) {
-            StreamConfig.streamingRemotely = STREAM_CFG_LOCAL;
-        }
-        else {
-            StreamConfig.streamingRemotely = STREAM_CFG_REMOTE;
-
-            if (StreamConfig.packetSize > 1024) {
-                // Cap packet size at 1024 for remote streaming to avoid
-                // MTU problems and fragmentation.
-                Limelog("Packet size capped at 1KB for remote streaming\n");
-                StreamConfig.packetSize = 1000;
-            }
-        }
-    }
-
+    StreamConfig.packetSize = 992;
+    StreamConfig.streamingRemotely = STREAM_CFG_REMOTE;
     Limelog("Initializing audio stream...");
     ListenerCallbacks.stageStarting(STAGE_AUDIO_STREAM_INIT);
     err = initializeAudioStream(irohEndpoint);
