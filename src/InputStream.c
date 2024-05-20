@@ -359,49 +359,49 @@ static void inputSendThreadProc(void* context) {
             }
 
             origPkt = &holder->packet.multiController;
-            for (;;) {
-                PNV_MULTI_CONTROLLER_PACKET newPkt;
-
-                // Peek at the next packet
-                if (LbqPeekQueueElement(&packetQueue, (void**)&controllerBatchHolder) != LBQ_SUCCESS) {
-                    break;
-                }
-
-                // If it's not a controller packet, we're done
-                if (controllerBatchHolder->packet.header.magic != multiControllerMagicLE) {
-                    break;
-                }
-
-                // Check if it's able to be batched
-                // NB: GFE does some discarding of gamepad packets received very soon after another.
-                // Thus, this batching is needed for correctness in some cases, as GFE will inexplicably
-                // drop *newer* packets in that scenario. The brokenness can be tested with consecutive
-                // calls to LiSendMultiControllerEvent() with different values for analog sticks (max -> zero).
-                newPkt = &controllerBatchHolder->packet.multiController;
-                if (newPkt->buttonFlags != origPkt->buttonFlags ||
-                    newPkt->buttonFlags2 != origPkt->buttonFlags2 ||
-                    newPkt->controllerNumber != origPkt->controllerNumber ||
-                    newPkt->activeGamepadMask != origPkt->activeGamepadMask) {
-                    // Batching not allowed
-                    break;
-                }
-
-                // Remove the batchable controller packet
-                if (LbqPollQueueElement(&packetQueue, (void**)&controllerBatchHolder) != LBQ_SUCCESS) {
-                    break;
-                }
-
-                // Update the original packet
-                origPkt->leftTrigger = newPkt->leftTrigger;
-                origPkt->rightTrigger = newPkt->rightTrigger;
-                origPkt->leftStickX = newPkt->leftStickX;
-                origPkt->leftStickY = newPkt->leftStickY;
-                origPkt->rightStickX = newPkt->rightStickX;
-                origPkt->rightStickY = newPkt->rightStickY;
-
-                // Free the batched packet holder
-                freePacketHolder(controllerBatchHolder);
-            }
+//            for (;;) {
+//                PNV_MULTI_CONTROLLER_PACKET newPkt;
+//
+//                // Peek at the next packet
+//                if (LbqPeekQueueElement(&packetQueue, (void**)&controllerBatchHolder) != LBQ_SUCCESS) {
+//                    break;
+//                }
+//
+//                // If it's not a controller packet, we're done
+//                if (controllerBatchHolder->packet.header.magic != multiControllerMagicLE) {
+//                    break;
+//                }
+//
+//                // Check if it's able to be batched
+//                // NB: GFE does some discarding of gamepad packets received very soon after another.
+//                // Thus, this batching is needed for correctness in some cases, as GFE will inexplicably
+//                // drop *newer* packets in that scenario. The brokenness can be tested with consecutive
+//                // calls to LiSendMultiControllerEvent() with different values for analog sticks (max -> zero).
+//                newPkt = &controllerBatchHolder->packet.multiController;
+//                if (newPkt->buttonFlags != origPkt->buttonFlags ||
+//                    newPkt->buttonFlags2 != origPkt->buttonFlags2 ||
+//                    newPkt->controllerNumber != origPkt->controllerNumber ||
+//                    newPkt->activeGamepadMask != origPkt->activeGamepadMask) {
+//                    // Batching not allowed
+//                    break;
+//                }
+//
+//                // Remove the batchable controller packet
+//                if (LbqPollQueueElement(&packetQueue, (void**)&controllerBatchHolder) != LBQ_SUCCESS) {
+//                    break;
+//                }
+//
+//                // Update the original packet
+//                origPkt->leftTrigger = newPkt->leftTrigger;
+//                origPkt->rightTrigger = newPkt->rightTrigger;
+//                origPkt->leftStickX = newPkt->leftStickX;
+//                origPkt->leftStickY = newPkt->leftStickY;
+//                origPkt->rightStickX = newPkt->rightStickX;
+//                origPkt->rightStickY = newPkt->rightStickY;
+//
+//                // Free the batched packet holder
+//                freePacketHolder(controllerBatchHolder);
+//            }
 
             lastControllerPacketTime[controllerNumber] = now;
         }

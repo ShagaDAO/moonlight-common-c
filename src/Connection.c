@@ -217,6 +217,12 @@ static bool parseRtspPortNumberFromUrl(const char* rtspSessionUrl, uint16_t* por
     return true;
 }
 
+void
+init_alpn_slice(slice_ref_uint8_t *slice, const char *str) {
+    slice->ptr = (uint8_t *) str;  // Point to the string literal
+    slice->len = strlen(str);  // Compute the length of the string
+}
+
 // Starts the connection to the streaming machine
 int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION streamConfig, PCONNECTION_LISTENER_CALLBACKS clCallbacks,
     PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDERER_CALLBACKS arCallbacks, void* renderContext, int drFlags,
@@ -373,25 +379,17 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     Limelog("Initializing iroh endpoint...");
     MagicEndpointConfig_t config = magic_endpoint_config_default();
     // TODO: improve API
-    char videoAlpn[] = "/moonlight/video/1";
     slice_ref_uint8_t videoAlpnSlice;
-    videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
-    videoAlpnSlice.len = strlen(videoAlpn);
+    init_alpn_slice(&videoAlpnSlice, "/moonlight/video/1");
     magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
-    char audioAlpn[] = "/moonlight/audio/1";
     slice_ref_uint8_t audioAlpnSlice;
-    audioAlpnSlice.ptr = (uint8_t *) &audioAlpn[0];
-    audioAlpnSlice.len = strlen(audioAlpn);
+    init_alpn_slice(&audioAlpnSlice, "/moonlight/audio/1");
     magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
-    char rtspAlpn[] = "/moonlight/rtsp/1";
     slice_ref_uint8_t rtspAlpnSlice;
-    rtspAlpnSlice.ptr = (uint8_t *) &rtspAlpn[0];
-    rtspAlpnSlice.len = strlen(rtspAlpn);
+    init_alpn_slice(&rtspAlpnSlice, "/moonlight/rtsp/1");
     magic_endpoint_config_add_alpn(&config, rtspAlpnSlice);
-    char controlAlpn[] = "/moonlight/control/1";
     slice_ref_uint8_t controlAlpnSlice;
-    controlAlpnSlice.ptr = (uint8_t *) &controlAlpn[0];
-    controlAlpnSlice.len = strlen(controlAlpn);
+    init_alpn_slice(&controlAlpnSlice, "/moonlight/control/1");
     magic_endpoint_config_add_alpn(&config, controlAlpnSlice);
 
     irohEndpoint = magic_endpoint_default();

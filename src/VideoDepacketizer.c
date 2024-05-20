@@ -1067,7 +1067,7 @@ static void processRtpPayload(PNV_VIDEO_PACKET videoPacket, int length,
         if (waitingForIdrFrame || waitingForRefInvalFrame) {
             // IDR wait takes priority over RFI wait (and an IDR frame will satisfy both)
             if (waitingForIdrFrame) {
-                Limelog("Waiting for IDR frame\n");
+                //Limelog("Waiting for IDR frame\n");
 
                 // We wait for the first fully received frame after a loss to approximate
                 // detection of the recovery of the network. Requesting an IDR frame while

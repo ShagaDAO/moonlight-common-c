@@ -730,7 +730,6 @@ int RtpvAddPacket(PRTP_VIDEO_QUEUE queue, PRTP_PACKET packet, int length, PRTPV_
     // Multi-block FEC details must remain the same within a single frame
     LC_ASSERT_VT(fecCurrentBlockNumber == queue->multiFecCurrentBlockNumber);
     LC_ASSERT_VT(((nvPacket->multiFecBlocks >> 6) & 0x3) == queue->multiFecLastBlockNumber);
-    Limelog(" length %d, dataOffset %d, stream packetsize %d ", length, dataOffset, StreamConfig.packetSize);
     LC_ASSERT_VT((nvPacket->flags & FLAG_EOF) || length - dataOffset == StreamConfig.packetSize);
     if (!queuePacket(queue, packetEntry, packet, length, !isBefore16(packet->sequenceNumber, queue->bufferFirstParitySequenceNumber), false)) {
         return RTPF_RET_REJECTED;
