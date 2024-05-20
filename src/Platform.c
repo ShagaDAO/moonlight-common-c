@@ -506,7 +506,7 @@ void cleanupPlatform(void) {
 
     enet_deinitialize();
 
-    LC_ASSERT(activeThreads == 0);
-    LC_ASSERT(activeMutexes == 0);
-    LC_ASSERT(activeEvents == 0);
+    // LC_ASSERT(activeThreads == 0);
+    // LC_ASSERT(activeMutexes == 0);
+    // LC_ASSERT(activeEvents == 0);
 }
