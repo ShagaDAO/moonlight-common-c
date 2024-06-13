@@ -42,7 +42,7 @@ char *irohNodeAddressTest = NULL;
 // iroh node addr
 NodeAddr_t IrohServerNodeAddr;
 
-MagicEndpoint_t * irohEndpoint, *irohEndpoint2;
+Endpoint_t * irohEndpoint, *irohEndpoint2;
 Connection_t* irohConnection, *irohAudioConnection, *irohVideoConnection, *controlConnection;
 
 // Connection stages
@@ -137,7 +137,7 @@ void LiStopConnection(void) {
     }
     if (stage == STAGE_NAME_RESOLUTION) {
         Limelog("Cleaning up name resolution...");
-        magic_endpoint_free(irohEndpoint);
+        endpoint_free(irohEndpoint);
         stage--;
         Limelog("done\n");
     }
@@ -377,23 +377,23 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     ListenerCallbacks.stageStarting(STAGE_NAME_RESOLUTION);
 
     Limelog("Initializing iroh endpoint...");
-    MagicEndpointConfig_t config = magic_endpoint_config_default();
+    EndpointConfig_t config = endpoint_config_default();
     // TODO: improve API
     slice_ref_uint8_t videoAlpnSlice;
     init_alpn_slice(&videoAlpnSlice, "/moonlight/video/1");
-    magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
+    endpoint_config_add_alpn(&config, videoAlpnSlice);
     slice_ref_uint8_t audioAlpnSlice;
     init_alpn_slice(&audioAlpnSlice, "/moonlight/audio/1");
-    magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
+    endpoint_config_add_alpn(&config, audioAlpnSlice);
     slice_ref_uint8_t rtspAlpnSlice;
     init_alpn_slice(&rtspAlpnSlice, "/moonlight/rtsp/1");
-    magic_endpoint_config_add_alpn(&config, rtspAlpnSlice);
+    endpoint_config_add_alpn(&config, rtspAlpnSlice);
     slice_ref_uint8_t controlAlpnSlice;
     init_alpn_slice(&controlAlpnSlice, "/moonlight/control/1");
-    magic_endpoint_config_add_alpn(&config, controlAlpnSlice);
+    endpoint_config_add_alpn(&config, controlAlpnSlice);
 
-    irohEndpoint = magic_endpoint_default();
-    err = magic_endpoint_bind(&config, 0, &irohEndpoint);
+    irohEndpoint = endpoint_default();
+    err = endpoint_bind(&config, 0, &irohEndpoint);
 
     if (err != 0) {
         Limelog("failed %d\n", err);
@@ -424,7 +424,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
 
     // Setup the control iroh connection, used for the RTSP handshake and the control stream
     irohConnection = connection_default();
-    err = magic_endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    err = endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
     if (err != 0) {
         Limelog("[iroh control] failed endpoint connect: %d\n", err);
         goto Cleanup;
@@ -444,8 +444,8 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     Limelog("Initializing control stream...");
     ListenerCallbacks.stageStarting(STAGE_CONTROL_STREAM_INIT);
     // controlConnection = connection_default();
-    // err = magic_endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
-    //err = magic_endpoint_connect(&irohEndpoint2, controlAlpnSlice, IrohServerNodeAddr, &controlConnection);
+    // err = endpoint_connect(&irohEndpoint, rtspAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    //err = endpoint_connect(&irohEndpoint2, controlAlpnSlice, IrohServerNodeAddr, &controlConnection);
      Limelog("Initializing control stream... 2 ");
     err = initializeControlStream(serverInfo->irohNodeAddress, irohEndpoint );
     if (err != 0) {

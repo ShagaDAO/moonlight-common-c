@@ -15,7 +15,7 @@ static RTP_VIDEO_QUEUE rtpQueue;
 // static SOCKET rtpSocket = INVALID_SOCKET;
 static SOCKET firstFrameSocket = INVALID_SOCKET;
 
-static MagicEndpoint_t* irohEndpoint = NULL;
+static Endpoint_t* irohEndpoint = NULL;
 static Connection_t* irohConnection = NULL;
 static RecvStream_t *recvStream = NULL;
 
@@ -44,7 +44,7 @@ static bool receivedFullFrame;
 #define RTP_RECV_PACKETS_BUFFERED 2048
 
 // Initialize the video stream
-void initializeVideoStream(MagicEndpoint_t* ep) {
+void initializeVideoStream(Endpoint_t* ep) {
     initializeVideoDepacketizer(StreamConfig.packetSize);
     RtpvInitializeQueue(&rtpQueue);
     decryptionCtx = PltCreateCryptoContext();
@@ -97,6 +97,7 @@ static void VideoPingThreadProc(void* context) {
             buffer.ptr = (uint8_t*) &VideoPingPayload;
             buffer.len = sizeof(VideoPingPayload);
             connection_write_datagram(&irohConnection, buffer);
+            Limelog("AUDIO VIDEO Send data 1");
         }
         else {
             // sendto(rtpSocket, legacyPingData, sizeof(legacyPingData), 0, (struct sockaddr*)&saddr, AddrLen);
@@ -105,6 +106,7 @@ static void VideoPingThreadProc(void* context) {
             buffer.ptr = (uint8_t*) &legacyPingData;
             buffer.len = sizeof(legacyPingData);
             connection_write_datagram(&irohConnection, buffer);
+            Limelog("AUDIO VIDEO Send data 2");
         }
 
         PltSleepMsInterruptible(&udpPingThread, 500);
@@ -179,7 +181,6 @@ static void VideoReceiveThreadProc(void* context) {
                             useSelect);*/
         // TODO: read with timeout
         err = connection_read_datagram_timeout(&irohConnection, &recvBuffer, UDP_RECV_POLL_TIMEOUT_MS);
-       Limelog("RTT is %d", connection_rtt(&irohConnection));
         iroh_rtt = connection_rtt(&irohConnection);
         // err = recv_stream_read(&recvStream, recvBufferSlice);
 
@@ -455,10 +456,10 @@ int startVideoStream(void* rendererContext, int drFlags, char* nodeAddress) {
     videoAlpnSlice.ptr = (uint8_t *) &videoAlpn[0];
     videoAlpnSlice.len = strlen(videoAlpn);
 
-    irohEndpoint = magic_endpoint_default();
-    MagicEndpointConfig_t config = magic_endpoint_config_default();
-    magic_endpoint_config_add_alpn(&config, videoAlpnSlice);
-    int bind_res = magic_endpoint_bind(&config, 0, &irohEndpoint);
+    irohEndpoint = endpoint_default();
+    EndpointConfig_t config = endpoint_config_default();
+    endpoint_config_add_alpn(&config, videoAlpnSlice);
+    int bind_res = endpoint_bind(&config, 0, &irohEndpoint);
 
     if (bind_res != 0)
     {
@@ -468,7 +469,7 @@ int startVideoStream(void* rendererContext, int drFlags, char* nodeAddress) {
     IrohServerNodeAddr = node_addr_default();
     err = node_addr_from_string(nodeAddress, &IrohServerNodeAddr);
     irohConnection = connection_default();
-    err = magic_endpoint_connect(&irohEndpoint, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    err = endpoint_connect(&irohEndpoint, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
     if (err != 0) {
         VideoCallbacks.cleanup();
         return err;

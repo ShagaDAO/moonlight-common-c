@@ -280,7 +280,7 @@ static bool supportsIdrFrameRequest;
 #define PERIODIC_PING_INTERVAL_MS 100
 
 // Initializes the control stream
-int initializeControlStream(char* nodeAddress, MagicEndpoint_t *ep) {
+int initializeControlStream(char* nodeAddress, Endpoint_t *ep) {
     stopping = false;
 
 
@@ -293,7 +293,7 @@ int initializeControlStream(char* nodeAddress, MagicEndpoint_t *ep) {
     IrohServerNodeAddr = node_addr_default();
     int err = node_addr_from_string(nodeAddress, &IrohServerNodeAddr);
     irohConnection = connection_default();
-    err = magic_endpoint_connect(&ep, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
+    err = endpoint_connect(&ep, videoAlpnSlice, IrohServerNodeAddr, &irohConnection);
 
 
 
@@ -688,6 +688,7 @@ static bool sendMessageIroh(short ptype, short paylen, const void* payload) {
     if (packet == NULL) {
         return false;
     }
+    Limelog("Vivek Payload %s %d", (char *)payload, paylen );
     packet->type = LE16(ptype);
     packet->payloadLength = LE16(paylen);
     memcpy(&packet[1], payload, paylen);
@@ -696,7 +697,7 @@ static bool sendMessageIroh(short ptype, short paylen, const void* payload) {
     slice_ref_uint8_t buffer;
     buffer.ptr = (uint8_t *) packet;
     buffer.len = sizeof(*packet) + paylen;
-
+    Limelog("Vivek Payload %s %d", (char *)buffer.ptr, buffer.len );
     // -- Lock Start
     PltLockMutex(&enetMutex);
     //Limelog(" Packet length %d %d", sizeof(*packet), paylen);

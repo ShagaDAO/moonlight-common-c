@@ -1,7 +1,7 @@
 #include "Limelight-internal.h"
 
 // static SOCKET rtpSocket = INVALID_SOCKET;
-static MagicEndpoint_t* irohEndpoint = NULL;
+static Endpoint_t* irohEndpoint = NULL;
 static Connection_t* irohAudioConnection = NULL;
 
 static LINKED_BLOCKING_QUEUE packetQueue;
@@ -83,7 +83,7 @@ static void AudioPingThreadProc(void* context) {
 }
 
 // Initialize the audio stream and start
-int initializeAudioStream(MagicEndpoint_t* ep) {
+int initializeAudioStream(Endpoint_t* ep) {
     LbqInitializeLinkedBlockingQueue(&packetQueue, 30);
     RtpaInitializeQueue(&rtpAudioQueue);
     lastSeq = 0;
@@ -126,10 +126,10 @@ int notifyAudioPortNegotiationComplete(void) {
     audioAlpnSlice.len = strlen(audioAlpn);
     Limelog("Notify 2");
 
-    MagicEndpoint_t *ep = magic_endpoint_default();
-    MagicEndpointConfig_t config = magic_endpoint_config_default();
-    magic_endpoint_config_add_alpn(&config, audioAlpnSlice);
-    int bind_res = magic_endpoint_bind(&config, 0, &ep);
+    Endpoint_t *ep = endpoint_default();
+    EndpointConfig_t config = endpoint_config_default();
+    endpoint_config_add_alpn(&config, audioAlpnSlice);
+    int bind_res = endpoint_bind(&config, 0, &ep);
 
     if (bind_res != 0)
     {
@@ -148,7 +148,7 @@ int notifyAudioPortNegotiationComplete(void) {
         return -1;
     }
     Limelog("Notify 2.3");
-    err = magic_endpoint_connect(&ep, audioAlpnSlice, IrohServerNodeAddr, &irohAudioConnection);
+    err = endpoint_connect(&ep, audioAlpnSlice, IrohServerNodeAddr, &irohAudioConnection);
 
     Limelog("Notify 3");
     if (err != 0) {

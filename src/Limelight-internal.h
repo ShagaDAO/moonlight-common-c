@@ -116,7 +116,7 @@ void setRecorderCallbacks(PDECODER_RENDERER_CALLBACKS drCallbacks, PAUDIO_RENDER
 
 char* getSdpPayloadForStreamConfig(int rtspClientVersion, int* length);
 
-int initializeControlStream(char * addr, MagicEndpoint_t * ep);
+int initializeControlStream(char * addr, Endpoint_t * ep);
 int startControlStream(void);
 int stopControlStream(void);
 void destroyControlStream(void);
@@ -137,13 +137,13 @@ void stopVideoDepacketizer(void);
 void requestDecoderRefresh(void);
 void notifyFrameLost(unsigned int frameNumber, bool speculative);
 
-void initializeVideoStream(MagicEndpoint_t*);
+void initializeVideoStream(Endpoint_t*);
 void destroyVideoStream(void);
 void notifyKeyFrameReceived(void);
 int startVideoStream(void* rendererContext, int drFlags, char *nodeAddress);
 void stopVideoStream(void);
 
-int initializeAudioStream(MagicEndpoint_t*);
+int initializeAudioStream(Endpoint_t*);
 int notifyAudioPortNegotiationComplete(void);
 void destroyAudioStream(void);
 int startAudioStream(void* audioContext, int arFlags);
