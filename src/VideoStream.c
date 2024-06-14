@@ -189,7 +189,7 @@ static void VideoReceiveThreadProc(void* context) {
             ListenerCallbacks.connectionTerminated(LastSocketFail());
             break;
         }
-        else if (rust_buffer_len(&recvBuffer) == 0 || err == MAGIC_ENDPOINT_RESULT_TIMEOUT) {
+        else if (rust_buffer_len(&recvBuffer) == 0 || err == ENDPOINT_RESULT_TIMEOUT) {
             if (!receivedDataFromPeer) {
                 // If we wait many seconds without ever receiving a video packet,
                 // assume something is broken and terminate the connection.

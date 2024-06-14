@@ -420,7 +420,7 @@ static bool transactRtspMessageTcp(PRTSP_MESSAGE request, PRTSP_MESSAGE response
                                           &recvBuffer,
                                           maxSize,
                                           RTSP_RECEIVE_TIMEOUT_SEC * 1000);
-    if (err == MAGIC_ENDPOINT_RESULT_TIMEOUT) {
+    if (err == ENDPOINT_RESULT_TIMEOUT) {
         *error = ETIMEDOUT;
         Limelog("RTSP request timed out\n");
         goto Exit;
