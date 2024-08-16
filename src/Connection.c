@@ -391,6 +391,7 @@ int LiStartConnection(PSERVER_INFORMATION serverInfo, PSTREAM_CONFIGURATION stre
     slice_ref_uint8_t controlAlpnSlice;
     init_alpn_slice(&controlAlpnSlice, "/moonlight/control/1");
     endpoint_config_add_alpn(&config, controlAlpnSlice);
+    config.discovery_cfg = DISCOVERY_CONFIG_ALL;
 
     irohEndpoint = endpoint_default();
     err = endpoint_bind(&config, 0, &irohEndpoint);
